@@ -39,6 +39,19 @@ class RullerAITests(unittest.TestCase):
         again = RullerAI(Settings(data_dir=Path(self.temp.name)))
         self.assertTrue(any("test note" in item["content"] for item in again.memory.recent(10)))
 
+    def test_auto_learns_and_preserves_memory(self):
+        self.ai.chat("I like to use Python for automation and testing.")
+        again = RullerAI(Settings(data_dir=Path(self.temp.name)))
+        self.assertTrue(any("Python" in item["content"] for item in again.memory.recent(20)))
+
+    def test_memory_guard_rejects_external_tampering(self):
+        guard = Path(self.temp.name) / "memory" / ".memory_guard.json"
+        self.ai.chat("/remember test note")
+        with open(guard, "w", encoding="utf-8") as handle:
+            handle.write('{"tampered": true}')
+        with self.assertRaises(RuntimeError):
+            RullerAI(Settings(data_dir=Path(self.temp.name)))
+
     def test_empty_input(self):
         self.assertEqual(self.ai.chat("   "), "Please enter a message.")
 
@@ -47,7 +60,3 @@ class RullerAITests(unittest.TestCase):
         path.write_text("not allowed", encoding="utf-8")
         result = self.ai.chat(f"/ingest {path}")
         self.assertIn("Unsupported file type", result)
-
-
-if __name__ == "__main__":
-    unittest.main()
