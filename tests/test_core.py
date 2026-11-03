@@ -4,6 +4,8 @@ from pathlib import Path
 
 from ruller_ai import RullerAI
 from ruller_ai.config import Settings
+from ruller_ai.knowledge import KnowledgeBase
+from ruller_ai.memory import MemoryStore
 from ruller_ai.reasoning import UnsafeExpression, safe_calculate
 
 
@@ -60,3 +62,30 @@ class RullerAITests(unittest.TestCase):
         path.write_text("not allowed", encoding="utf-8")
         result = self.ai.chat(f"/ingest {path}")
         self.assertIn("Unsupported file type", result)
+
+    def test_knowledge_index_deduplicates_and_tracks_eviction(self):
+        path = Path(self.temp.name) / "indexed-knowledge.json"
+        knowledge = KnowledgeBase(path, max_items=2)
+        self.assertTrue(knowledge.add_text("alpha beta"))
+        self.assertFalse(knowledge.add_text("alpha beta"))
+        knowledge.add_text("beta gamma")
+        knowledge.add_text("gamma delta")
+        self.assertEqual(knowledge.count, 2)
+        self.assertEqual([item["text"] for item in knowledge.search("alpha")], [])
+        self.assertEqual([item["text"] for item in knowledge.search("gamma")], ["beta gamma", "gamma delta"])
+        self.assertTrue(knowledge.add_text("alpha beta"))
+
+    def test_memory_index_tracks_append_eviction_and_clear(self):
+        path = Path(self.temp.name) / "indexed-memory.json"
+        memory = MemoryStore(path, max_items=2, guard_path=Path(self.temp.name) / "indexed-guard.json")
+        memory.add("user", "alpha beta")
+        memory.add("user", "beta gamma")
+        memory.add("user", "gamma delta")
+        self.assertEqual([item["content"] for item in memory.search("alpha")], [])
+        self.assertEqual([item["content"] for item in memory.search("gamma")], ["beta gamma", "gamma delta"])
+        memory.clear()
+        self.assertEqual(memory.search("gamma"), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
