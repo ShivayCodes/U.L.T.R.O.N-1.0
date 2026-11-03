@@ -1,5 +1,7 @@
+import logging
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from ruller_ai import RullerAI
@@ -7,6 +9,7 @@ from ruller_ai.config import Settings
 from ruller_ai.knowledge import KnowledgeBase
 from ruller_ai.memory import MemoryStore
 from ruller_ai.reasoning import UnsafeExpression, safe_calculate
+from ruller_ai.tools import Permission, ToolError, ToolRegistry, ToolSpec, create_builtin_registry
 
 
 class RullerAITests(unittest.TestCase):
@@ -85,6 +88,42 @@ class RullerAITests(unittest.TestCase):
         self.assertEqual([item["content"] for item in memory.search("gamma")], ["beta gamma", "gamma delta"])
         memory.clear()
         self.assertEqual(memory.search("gamma"), [])
+
+    def test_builtin_tools_are_listed_and_safe(self):
+        registry = create_builtin_registry()
+        self.assertEqual([tool.permission for tool in registry.list_tools()], [Permission.SAFE] * 3)
+        self.assertEqual(self.ai.chat("/tool list").count("[SAFE]"), 3)
+        self.assertIn("No arbitrary shell or Python", self.ai.chat("/tool status"))
+        self.assertIn("local system time", self.ai.chat("/time"))
+
+    def test_unit_conversion(self):
+        self.assertEqual(self.ai.chat("/convert 10 km to miles"), "10 km = 6.213711922373339795 miles")
+        self.assertEqual(self.ai.chat("/convert 0 c to f"), "0 c = 32 f")
+        self.assertIn("same category", self.ai.chat("/convert 1 km to kg"))
+        self.assertIn("Usage:", self.ai.chat("/convert 10 km"))
+
+    def test_relative_date_tool(self):
+        self.assertEqual(self.ai.chat("/date today"), f"{date.today().isoformat()} ({date.today().strftime('%A')})")
+        expected = date.today() + timedelta(days=7)
+        self.assertEqual(self.ai.chat("/date in 1 week"), f"{expected.isoformat()} ({expected.strftime('%A')})")
+        self.assertIn("Usage:", self.ai.chat("/date next month"))
+
+    def test_registry_requires_confirmation_and_audits_without_arguments(self):
+        registry = ToolRegistry()
+        registry.register(ToolSpec("write", "test", Permission.CONFIRM, "text", "writes", lambda arg: "done"))
+        with self.assertLogs("ruller_ai.tools", level="INFO") as captured:
+            with self.assertRaises(ToolError):
+                registry.run("write", "sensitive-secret")
+        self.assertIn("confirmation_required", captured.output[0])
+        self.assertNotIn("sensitive-secret", captured.output[0])
+        self.assertEqual(registry.run("write", "safe", confirmed=True), "done")
+
+    def test_tool_input_is_bounded_and_unknown_tools_rejected(self):
+        registry = create_builtin_registry()
+        with self.assertRaises(ToolError):
+            registry.run("convert", "x" * 301)
+        with self.assertRaises(ToolError):
+            registry.run("shell", "anything")
 
 
 if __name__ == "__main__":
