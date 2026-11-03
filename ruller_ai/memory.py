@@ -49,21 +49,22 @@ class MemoryStore:
 
         try:
             guard = read_json(self.guard_path, {})
-        except (OSError, RuntimeError, ValueError) as exc:
-            self._backup_memory("invalid-guard")
+        except RuntimeError as exc:
             raise RuntimeError(
-                "Memory integrity check failed. The protection guard is unreadable; "
-                "a backup was created and the session was stopped."
+                f"Memory integrity guard is invalid: {self.guard_path}"
             ) from exc
 
-        expected = guard.get("expected_hash") if isinstance(guard, dict) else None
+        if not isinstance(guard, dict) or not isinstance(guard.get("expected_hash"), str):
+            raise RuntimeError(f"Memory integrity guard is invalid: {self.guard_path}")
+        expected = guard.get("expected_hash")
         actual = self._fingerprint(self._items)
-        if not isinstance(expected, str) or expected != actual:
+        if expected != actual:
             self._backup_memory("tamper")
             raise RuntimeError(
-                "Memory integrity check failed. Protected memory or its guard was tampered with; "
+                "Memory integrity check failed. Protected memory was tampered with; "
                 "a backup was created and the session was stopped."
             )
+        self._write_guard()
 
     def add(self, role: str, content: str) -> None:
         if role not in {"user", "assistant", "system"}:

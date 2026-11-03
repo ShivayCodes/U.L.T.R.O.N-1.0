@@ -2,6 +2,12 @@
 import argparse
 from pathlib import Path
 
+if not __package__:
+    raise SystemExit(
+        "Run the CLI as a package from the repository root: "
+        "python -m ruller_ai"
+    )
+
 from .config import Settings
 from .engine import RullerAI
 

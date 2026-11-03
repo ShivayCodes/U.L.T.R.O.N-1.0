@@ -29,6 +29,10 @@ py -3 -m venv .venv
 python -m ruller_ai
 ```
 
+Run the CLI as a package rather than executing `ruller_ai\cli.py` directly;
+direct execution does not provide the package context required by its relative
+imports.
+
 If PowerShell blocks activation, you can skip activation and run `.venv\Scripts\python.exe -m ruller_ai`.
 
 On macOS/Linux, activate with `source .venv/bin/activate`.

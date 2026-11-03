@@ -17,8 +17,12 @@ class Settings:
     api_key: str | None = None
 
     @property
+    def memory_dir(self) -> Path:
+        return self.data_dir / "memory"
+
+    @property
     def memory_file(self) -> Path:
-        return self.data_dir / "memory.json"
+        return self.memory_dir / "conversation.json"
 
     @property
     def knowledge_file(self) -> Path:
@@ -27,3 +31,11 @@ class Settings:
     @property
     def feedback_file(self) -> Path:
         return self.data_dir / "feedback.jsonl"
+
+    @property
+    def guard_file(self) -> Path:
+        return self.memory_dir / ".memory_guard.json"
+
+    @property
+    def backup_dir(self) -> Path:
+        return self.memory_dir / "backup"

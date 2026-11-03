@@ -40,6 +40,7 @@ class RullerAI:
 
         self.memory.add("user", text)
         lowered = text.casefold()
+
         if lowered in {"/help", "help"}:
             answer = self.help_text()
         elif lowered in {"/time", "what time is it", "what is the time"}:
@@ -71,6 +72,7 @@ class RullerAI:
         else:
             answer = self._answer_from_knowledge(text)
             self._learn_from_conversation(text)
+
         self.memory.add("assistant", answer)
         return answer
 
