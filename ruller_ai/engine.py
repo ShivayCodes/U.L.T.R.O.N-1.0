@@ -15,8 +15,21 @@ class RullerAI:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
-        self.memory = MemoryStore(self.settings.memory_file, self.settings.max_memory_items)
+        self.settings.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.memory = MemoryStore(
+            self.settings.memory_file,
+            self.settings.max_memory_items,
+            self.settings.guard_file,
+        )
         self.knowledge = KnowledgeBase(self.settings.knowledge_file, self.settings.max_knowledge_items)
+
+    def _learn_from_conversation(self, text: str) -> None:
+        cleaned = text.strip()
+        if not cleaned:
+            return
+        if len(cleaned) < 8:
+            return
+        self.memory.add_auto_memory("conversation", cleaned)
 
     def chat(self, message: str) -> str:
         text = message.strip()
@@ -37,13 +50,14 @@ class RullerAI:
         elif lowered.startswith("/calc "):
             answer = self._calculate(text[6:])
         elif lowered.startswith("/remember "):
-            fact = text[len("/remember "):].strip()
+            fact = text[len("/remember ") :].strip()
             answer = "Tell me what to remember after /remember." if not fact else self._remember(fact)
         elif lowered.startswith("/learn "):
-            fact = text[len("/learn "):].strip()
+            fact = text[len("/learn ") :].strip()
             if fact:
                 added = self.knowledge.add_text(fact, "user note")
-                answer = "Saved to the local knowledge base." if added else "That note is already in the knowledge base."
+                self.memory.add_auto_memory("learn-command", fact)
+                answer = "Saved to the local knowledge base and protected memory." if added else "That note is already in the knowledge base."
             else:
                 answer = "Usage: /learn text you want to add"
         elif lowered.startswith("/search "):
@@ -56,6 +70,7 @@ class RullerAI:
             answer = "Hello! I'm Ruller AI, your local assistant prototype. Ask a question, use /help, or teach me with /learn."
         else:
             answer = self._answer_from_knowledge(text)
+            self._learn_from_conversation(text)
         self.memory.add("assistant", answer)
         return answer
 
@@ -72,7 +87,7 @@ class RullerAI:
             "  /stats                Show local data counts\n"
             "  /time                 Show local system time\n"
             "  /clear                Clear conversation memory\n"
-            "Data is stored locally in ~/.ruller_ai by default. This baseline uses retrieval and rules, not a trained language model."
+            "Memory is stored in ~/.ruller_ai/memory and protected with a tamper-detection guard."
         )
 
     def _calculate(self, expression: str) -> str:
@@ -116,7 +131,7 @@ class RullerAI:
             "I'm running in offline baseline mode, so I can't reliably answer open-ended questions yet. "
             "You can use /help, calculate with /calc, add trusted material with /learn, "
             "import a text file with /ingest, and search it with /search. "
-            "A trained language model can be integrated later behind a separate, tested interface."
+            "This system keeps memory in a protected local folder for reuse."
         )
 
     def _ingest(self, raw_path: str) -> str:
@@ -132,8 +147,11 @@ class RullerAI:
 
     def stats(self) -> str:
         return json.dumps(
-            {"memory_items": len(self.memory.recent(limit=self.settings.max_memory_items)),
-             "knowledge_items": self.knowledge.count,
-             "data_directory": str(self.settings.data_dir)},
+            {
+                "memory_items": len(self.memory.recent(limit=self.settings.max_memory_items)),
+                "knowledge_items": self.knowledge.count,
+                "data_directory": str(self.settings.data_dir),
+                "memory_directory": str(self.settings.memory_dir),
+            },
             indent=2,
         )
