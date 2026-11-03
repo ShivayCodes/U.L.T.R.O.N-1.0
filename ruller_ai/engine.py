@@ -51,10 +51,10 @@ class RullerAI:
         elif lowered.startswith("/calc "):
             answer = self._calculate(text[6:])
         elif lowered.startswith("/remember "):
-            fact = text[len("/remember "):].strip()
+            fact = text[len("/remember ") :].strip()
             answer = "Tell me what to remember after /remember." if not fact else self._remember(fact)
         elif lowered.startswith("/learn "):
-            fact = text[len("/learn "):].strip()
+            fact = text[len("/learn ") :].strip()
             if fact:
                 added = self.knowledge.add_text(fact, "user note")
                 self.memory.add_auto_memory("learn-command", fact)
