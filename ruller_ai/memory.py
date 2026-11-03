@@ -40,7 +40,7 @@ class MemoryStore:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "version": 1,
         }
-        write_json(self.guard_file, payload)
+        write_json(self.guard_path, payload)
 
     def _verify_guard(self) -> None:
         if not self.guard_path.exists():
@@ -49,13 +49,16 @@ class MemoryStore:
 
         try:
             guard = read_json(self.guard_path, {})
-        except RuntimeError:
-            self._write_guard()
-            return
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Memory integrity guard is invalid: {self.guard_path}"
+            ) from exc
 
+        if not isinstance(guard, dict) or not isinstance(guard.get("expected_hash"), str):
+            raise RuntimeError(f"Memory integrity guard is invalid: {self.guard_path}")
         expected = guard.get("expected_hash")
         actual = self._fingerprint(self._items)
-        if expected is not None and expected != actual:
+        if expected != actual:
             self._backup_memory("tamper")
             raise RuntimeError(
                 "Memory integrity check failed. Protected memory was tampered with; "
