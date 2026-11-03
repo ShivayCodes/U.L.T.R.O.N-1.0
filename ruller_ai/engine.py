@@ -95,7 +95,7 @@ class RullerAI:
             "  /calc 12 * (3 + 2)    Safely calculate arithmetic\n"
             "  /learn some fact      Add text to local knowledge\n"
             "  /search keywords      Search local knowledge\n"
-            "  /ingest path          Import a supported local text file (max 1 MB)\n"
+            "  /ingest path          Import a text file (max 1 MB) or CSV dataset (max 200 MB)\n"
             "  /remember a note      Save a note to conversation memory\n"
             "  /autolearn on|off     Opt in/out of saving future chat messages to knowledge\n"
             "  /convert 10 km to mi  Convert common local units (read-only)\n"
@@ -106,6 +106,7 @@ class RullerAI:
             "  /stats                Show local data counts\n"
             "  /time                 Show local system time\n"
             "  /clear                Clear conversation memory only\n"
+            "CSV rows are added to searchable local knowledge; this does not train a model.\n"
             "Web results are external and may be incomplete or inaccurate."
         )
 
@@ -123,7 +124,6 @@ class RullerAI:
                 rows.append(f"- {tool.name} [{tool.permission.value}]: {tool.description} Input: {tool.input_schema}. Side effects: {tool.side_effects}")
             return "\n".join(rows)
         if option == "status":
-            classifications = {tool.permission for tool in self.tools.list_tools()}
             return (
                 f"Registered built-in tools: {len(self.tools.list_tools())}. "
                 f"SAFE tools run automatically: {sum(tool.permission is Permission.SAFE for tool in self.tools.list_tools())}. "
@@ -216,12 +216,14 @@ class RullerAI:
     def _ingest(self, raw_path: str) -> str:
         value = raw_path.strip().strip('"')
         if not value:
-            return "Usage: /ingest path/to/file.txt"
+            return "Usage: /ingest path/to/file.txt or /ingest path/to/dataset.csv"
         path = Path(value).expanduser()
         try:
             added = self.knowledge.ingest_file(path)
         except (OSError, ValueError, RuntimeError) as exc:
             return f"Import failed: {exc}"
+        if path.suffix.casefold() == ".csv":
+            return f"Imported {added} new CSV row(s) into searchable local knowledge from {path}. This does not train a model."
         return f"Imported {added} new text section(s) from {path}."
 
     def stats(self) -> str:
