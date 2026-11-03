@@ -8,6 +8,7 @@ from .knowledge import KnowledgeBase
 from .memory import MemoryStore
 from .reasoning import UnsafeExpression, safe_calculate
 from .storage import read_json, write_json
+from .tools import Permission, ToolError, create_builtin_registry
 from .web_search import search_web
 
 
@@ -15,7 +16,7 @@ class RullerAI:
     """Offline-first assistant; network lookup is explicit and opt-in per query."""
 
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings o                  r Settings()
+        self.settings = settings or Settings()
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings.memory_dir.mkdir(parents=True, exist_ok=True)
         self.memory = MemoryStore(
@@ -27,6 +28,7 @@ class RullerAI:
         self.learning_file = self.settings.data_dir / "learning.json"
         learning = read_json(self.learning_file, {})
         self._auto_learn_enabled = isinstance(learning, dict) and learning.get("enabled") is True
+        self.tools = create_builtin_registry()
 
     def chat(self, message: str) -> str:
         text = message.strip()
@@ -41,17 +43,23 @@ class RullerAI:
         if lowered in {"/help", "help"}:
             answer = self.help_text()
         elif lowered in {"/time", "what time is it", "what is the time"}:
-            answer = datetime.now().astimezone().strftime("Your local system time is %Y-%m-%d %H:%M:%S %Z.")
+            answer = self._run_tool("time")
+        elif lowered == "/date" or lowered.startswith("/date "):
+            answer = self._run_tool("date", text[len("/date"):].strip())
+        elif lowered.startswith("/convert "):
+            answer = self._run_tool("convert", text[len("/convert"):].strip())
+        elif lowered == "/tool" or lowered.startswith("/tool "):
+            answer = self._tool_command(text[len("/tool"):].strip())
         elif lowered in {"/clear", "clear memory"}:
             self.memory.clear()
             answer = "Conversation memory cleared. Knowledge and saved web research were not changed."
         elif lowered.startswith("/calc "):
             answer = self._calculate(text[6:])
         elif lowered.startswith("/remember "):
-            fact = text[len("/remember ") :].strip()
+            fact = text[len("/remember "):].strip()
             answer = "Tell me what to remember after /remember." if not fact else self._remember(fact)
         elif lowered.startswith("/learn "):
-            fact = text[len("/learn ") :].strip()
+            fact = text[len("/learn "):].strip()
             if fact:
                 added = self.knowledge.add_text(fact, "user note")
                 answer = "Saved to the local knowledge base." if added else "That note is already in the knowledge base."
@@ -66,7 +74,7 @@ class RullerAI:
         elif lowered.startswith("/web "):
             answer = self._web_lookup(text[5:].strip(), save=False)
         elif lowered.startswith("/research "):
-            answer = self._web_lookup(text[len("/research "):].strip(), save=True)
+            answer = self._web_lookup(text[len("/research"):].strip(), save=True)
         elif lowered in {"/stats", "stats"}:
             answer = self.stats()
         elif lowered in {"hi", "hello", "hey", "hello ruller", "hi ruller"}:
@@ -90,6 +98,9 @@ class RullerAI:
             "  /ingest path          Import a supported local text file (max 1 MB)\n"
             "  /remember a note      Save a note to conversation memory\n"
             "  /autolearn on|off     Opt in/out of saving future chat messages to knowledge\n"
+            "  /convert 10 km to mi  Convert common local units (read-only)\n"
+            "  /date tomorrow        Show a local relative date (read-only)\n"
+            "  /tool list|status     Inspect built-in tools and permission policy\n"
             "  /web query            Search the web without saving results\n"
             "  /research query       Search the web and save returned snippets locally\n"
             "  /stats                Show local data counts\n"
@@ -97,6 +108,30 @@ class RullerAI:
             "  /clear                Clear conversation memory only\n"
             "Web results are external and may be incomplete or inaccurate."
         )
+
+    def _run_tool(self, name: str, argument: str = "") -> str:
+        try:
+            return self.tools.run(name, argument)
+        except ToolError as exc:
+            return f"Tool request rejected: {exc}"
+
+    def _tool_command(self, command: str) -> str:
+        option = command.casefold()
+        if option == "list":
+            rows = ["Built-in tools (only explicitly registered tools can run):"]
+            for tool in self.tools.list_tools():
+                rows.append(f"- {tool.name} [{tool.permission.value}]: {tool.description} Input: {tool.input_schema}. Side effects: {tool.side_effects}")
+            return "\n".join(rows)
+        if option == "status":
+            classifications = {tool.permission for tool in self.tools.list_tools()}
+            return (
+                f"Registered built-in tools: {len(self.tools.list_tools())}. "
+                f"SAFE tools run automatically: {sum(tool.permission is Permission.SAFE for tool in self.tools.list_tools())}. "
+                f"Tools requiring confirmation: {sum(tool.permission in {Permission.LIMITED, Permission.CONFIRM} for tool in self.tools.list_tools())}. "
+                f"Blocked tools: {sum(tool.permission is Permission.BLOCKED for tool in self.tools.list_tools())}. "
+                "No arbitrary shell or Python execution is available."
+            )
+        return "Usage: /tool list | /tool status"
 
     def _autolearn(self, option: str) -> str:
         if option.casefold() == "status":
@@ -195,6 +230,7 @@ class RullerAI:
                 "memory_items": len(self.memory.recent(limit=self.settings.max_memory_items)),
                 "knowledge_items": self.knowledge.count,
                 "auto_learning": self._auto_learn_enabled,
+                "built_in_tools": len(self.tools.list_tools()),
                 "data_directory": str(self.settings.data_dir),
                 "memory_directory": str(self.settings.memory_dir),
             },
