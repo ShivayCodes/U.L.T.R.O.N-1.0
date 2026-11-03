@@ -13,7 +13,7 @@ class RullerAI:
     """Offline-first assistant baseline; it does not pretend to be a trained LLM."""
 
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or Settings()
+        self.settings = settings o                  r Settings()
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings.memory_dir.mkdir(parents=True, exist_ok=True)
         self.memory = MemoryStore(
