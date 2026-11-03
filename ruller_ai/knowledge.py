@@ -23,9 +23,46 @@ class KnowledgeBase:
         if not isinstance(self._items, list):
             raise RuntimeError(f"Invalid knowledge format in {path}; expected a JSON list.")
 
+        # Keep a lightweight inverted index so repeated searches do not tokenize
+        # every passage, and duplicate checks do not scan the whole collection.
+        self._next_id = 0
+        self._order: list[int] = []
+        self._entries: dict[int, tuple[dict[str, Any], set[str]]] = {}
+        self._postings: dict[str, set[int]] = {}
+        self._fingerprint_counts: dict[tuple[Any, Any], int] = {}
+        for item in self._items:
+            self._index_item(item)
+
     @property
     def count(self) -> int:
         return len(self._items)
+
+    def _index_item(self, item: dict[str, Any]) -> int:
+        item_id = self._next_id
+        self._next_id += 1
+        item_tokens = tokens(str(item.get("text", "")))
+        self._order.append(item_id)
+        self._entries[item_id] = (item, item_tokens)
+        for token in item_tokens:
+            self._postings.setdefault(token, set()).add(item_id)
+        fingerprint = (item.get("source"), item.get("text"))
+        self._fingerprint_counts[fingerprint] = self._fingerprint_counts.get(fingerprint, 0) + 1
+        return item_id
+
+    def _remove_oldest(self) -> None:
+        item_id = self._order.pop(0)
+        item, item_tokens = self._entries.pop(item_id)
+        for token in item_tokens:
+            posting = self._postings[token]
+            posting.remove(item_id)
+            if not posting:
+                del self._postings[token]
+        fingerprint = (item.get("source"), item.get("text"))
+        remaining = self._fingerprint_counts[fingerprint] - 1
+        if remaining:
+            self._fingerprint_counts[fingerprint] = remaining
+        else:
+            del self._fingerprint_counts[fingerprint]
 
     def add_text(self, text: str, source: str = "manual") -> bool:
         cleaned = text.strip()
@@ -33,10 +70,13 @@ class KnowledgeBase:
             return False
         record = {"text": cleaned[:20_000], "source": source[:500]}
         fingerprint = (record["source"], record["text"])
-        if any((item.get("source"), item.get("text")) == fingerprint for item in self._items):
+        if self._fingerprint_counts.get(fingerprint, 0):
             return False
         self._items.append(record)
-        self._items = self._items[-self.max_items :]
+        self._index_item(record)
+        if len(self._items) > self.max_items:
+            self._items = self._items[-self.max_items :]
+            self._remove_oldest()
         write_json(self.path, self._items)
         return True
 
@@ -56,20 +96,23 @@ class KnowledgeBase:
         query_tokens = tokens(query)
         if not query_tokens:
             return []
-        scored = []
-        for item in self._items:
-            text = str(item.get("text", ""))
-            doc_tokens = tokens(text)
-            if not doc_tokens:
-                continue
-            overlap = len(query_tokens & doc_tokens)
-            if not overlap:
-                continue
-            # Overlap normalized by query size; intentionally simple and explainable.
-            score = overlap / len(query_tokens)
-            scored.append((score, item))
-        scored.sort(key=lambda pair: pair[0], reverse=True)
+
+        # Accumulate overlap counts only for entries indexed under a query token.
+        scores: dict[int, int] = {}
+        for token in query_tokens:
+            for item_id in self._postings.get(token, ()):
+                scores[item_id] = scores.get(item_id, 0) + 1
+        if not scores or limit <= 0:
+            return []
+
+        # IDs increase with insertion order, preserving the previous stable tie order.
+        ranked_ids = sorted(scores, key=lambda item_id: (-scores[item_id], item_id))[:limit]
+        query_size = len(query_tokens)
         return [
-            {"score": round(score, 3), "text": item["text"], "source": item.get("source", "unknown")}
-            for score, item in scored[:max(0, limit)]
+            {
+                "score": round(scores[item_id] / query_size, 3),
+                "text": self._entries[item_id][0]["text"],
+                "source": self._entries[item_id][0].get("source", "unknown"),
+            }
+            for item_id in ranked_ids
         ]

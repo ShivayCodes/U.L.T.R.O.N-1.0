@@ -22,8 +22,43 @@ class MemoryStore:
         self._items: list[dict[str, Any]] = read_json(path, [])
         if not isinstance(self._items, list):
             raise RuntimeError(f"Invalid memory format in {path}; expected a JSON list.")
+        self._build_search_index()
 
         self._verify_guard()
+
+    def _build_search_index(self) -> None:
+        self._next_id = 0
+        self._order: list[int] = []
+        self._entries: dict[int, tuple[dict[str, Any], set[str]]] = {}
+        self._postings: dict[str, set[int]] = {}
+        for item in self._items:
+            self._index_item(item)
+
+    def _index_item(self, item: dict[str, Any]) -> None:
+        item_id = self._next_id
+        self._next_id += 1
+        content = str(item.get("content", ""))
+        words = {word for word in content.casefold().split() if len(word) > 2}
+        self._order.append(item_id)
+        self._entries[item_id] = (item, words)
+        for word in words:
+            self._postings.setdefault(word, set()).add(item_id)
+
+    def _remove_oldest_indexed_item(self) -> None:
+        item_id = self._order.pop(0)
+        _, words = self._entries.pop(item_id)
+        for word in words:
+            posting = self._postings[word]
+            posting.remove(item_id)
+            if not posting:
+                del self._postings[word]
+
+    def _append(self, item: dict[str, Any]) -> None:
+        self._items.append(item)
+        self._index_item(item)
+        if len(self._items) > self.max_items:
+            self._items = self._items[-self.max_items :]
+            self._remove_oldest_indexed_item()
 
     def _fingerprint(self, payload: Any) -> str:
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -74,8 +109,7 @@ class MemoryStore:
             "content": content[:8_000],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self._items.append(item)
-        self._items = self._items[-self.max_items :]
+        self._append(item)
         write_json(self.path, self._items)
         self._write_guard()
 
@@ -89,8 +123,7 @@ class MemoryStore:
             "source": source,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self._items.append(item)
-        self._items = self._items[-self.max_items :]
+        self._append(item)
         write_json(self.path, self._items)
         self._write_guard()
 
@@ -99,19 +132,17 @@ class MemoryStore:
 
     def clear(self) -> None:
         self._items = []
+        self._build_search_index()
         write_json(self.path, self._items)
         self._write_guard()
 
     def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         terms = {term.casefold() for term in query.split() if len(term) > 2}
-        if not terms:
+        if not terms or limit <= 0:
             return []
-        ranked = []
-        for item in self._items:
-            content = str(item.get("content", ""))
-            words = set(content.casefold().split())
-            score = len(terms & words)
-            if score:
-                ranked.append((score, item))
-        ranked.sort(key=lambda pair: pair[0], reverse=True)
-        return [dict(item) for _, item in ranked[:limit]]
+        scores: dict[int, int] = {}
+        for term in terms:
+            for item_id in self._postings.get(term, ()):
+                scores[item_id] = scores.get(item_id, 0) + 1
+        ranked_ids = sorted(scores, key=lambda item_id: (-scores[item_id], item_id))[:limit]
+        return [dict(self._entries[item_id][0]) for item_id in ranked_ids]
