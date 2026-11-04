@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Download WikiWhy v1.1 and prepare a CSV for ULTRON's local retrieval.
+"""Download WikiWhy v1.1 and format compact retrieval passages for ULTRON.
 
-This prepares retrieval documents; it does not train or fine-tune a model.
+This prepares local search data; it does not train or fine-tune a model.
 """
 from __future__ import annotations
 
@@ -16,12 +16,25 @@ DATA_URL = (
     "https://raw.githubusercontent.com/matt-seb-ho/WikiWhy/"
     f"{REVISION}/dataset/v1.1"
 )
+DATASET_SOURCE = f"https://github.com/matt-seb-ho/WikiWhy/tree/{REVISION}/dataset/v1.1"
 FILES = {
     "context.json": ("ctx", "title", "topic", "split"),
     "question.json": ("question",),
     "cause.json": ("cause",),
     "effect.json": ("effect",),
     "explanation.json": ("explanation",),
+}
+
+# Keep the query and answer-bearing fields intact ahead of optional background.
+FIELD_LIMITS = {
+    "question": 1_200,
+    "cause": 2_000,
+    "effect": 2_000,
+    "explanation": 6_000,
+    "topic": 300,
+    "title": 500,
+    "ctx": 1_200,
+    "split": 30,
 }
 
 
@@ -36,18 +49,19 @@ def _column_values(payload: object, wanted: tuple[str, ...], filename: str) -> d
     if isinstance(payload, list):
         if not all(isinstance(row, dict) for row in payload):
             raise ValueError(f"Unexpected row format in {filename}")
-        return {
-            name: [row.get(name, "") for row in payload]
-            for name in wanted
-        }
+        return {name: [row.get(name, "") for row in payload] for name in wanted}
 
     if isinstance(payload, dict):
-        # pandas' JSON table/column layout: {column: {row_id: value}}.
+        # pandas' column-oriented layout: {column: {row_id: value}}.
         if any(name in payload for name in wanted):
             result: dict[str, list[object]] = {}
             for name in wanted:
                 values = payload.get(name, [])
-                result[name] = list(values.values()) if isinstance(values, dict) else list(values) if isinstance(values, list) else [values]
+                result[name] = (
+                    list(values.values()) if isinstance(values, dict)
+                    else list(values) if isinstance(values, list)
+                    else [values]
+                )
             return result
 
         # Index-oriented records: {row_id: {column: value}}.
@@ -56,6 +70,32 @@ def _column_values(payload: object, wanted: tuple[str, ...], filename: str) -> d
             return {name: [row.get(name, "") for row in rows] for name in wanted}
 
     raise ValueError(f"Unsupported JSON layout in {filename}")
+
+
+def _bounded(value: object, max_chars: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def format_ultron_passage(record: dict[str, object]) -> str:
+    """Make one compact, labeled passage; place the answer before context."""
+    labels = (
+        ("question", "Question"),
+        ("cause", "Cause"),
+        ("effect", "Effect"),
+        ("explanation", "Explanation"),
+        ("topic", "Topic"),
+        ("title", "Article"),
+        ("ctx", "Context excerpt"),
+    )
+    parts = ["WikiWhy cause-and-effect example (dataset reference; verify before relying on it)."]
+    for key, label in labels:
+        value = _bounded(record.get(key, ""), FIELD_LIMITS[key])
+        if value:
+            parts.append(f"{label}: {value}")
+    return "\n".join(parts)
 
 
 def main() -> int:
@@ -78,34 +118,29 @@ def main() -> int:
         if not cached.exists():
             _download(cached, f"{DATA_URL}/{filename}")
         with cached.open("r", encoding="utf-8") as source:
-            part = _column_values(json.load(source), names, filename)
-        for name, values in part.items():
-            columns[name] = values
+            columns.update(_column_values(json.load(source), names, filename))
 
     lengths = {len(values) for values in columns.values()}
     if len(lengths) != 1:
         raise ValueError(f"WikiWhy files have inconsistent row counts: {sorted(lengths)}")
 
     row_count = lengths.pop() if lengths else 0
-    fields = ["question", "cause", "effect", "explanation", "ctx", "title", "topic", "split", "source"]
-    source_url = f"https://github.com/matt-seb-ho/WikiWhy/tree/{REVISION}/dataset/v1.1"
-    written = 0
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
     with args.output.open("w", encoding="utf-8", newline="") as destination:
-        writer = csv.DictWriter(destination, fieldnames=fields)
+        writer = csv.DictWriter(destination, fieldnames=("text", "source"))
         writer.writeheader()
         for index in range(row_count):
-            row = {name: str(columns.get(name, [""] * row_count)[index] or "") for name in fields if name != "source"}
-            if args.split != "all" and row.get("split", "").casefold() != args.split:
+            record = {name: values[index] for name, values in columns.items()}
+            if args.split != "all" and str(record.get("split", "")).casefold() != args.split:
                 continue
-            row["source"] = source_url
-            writer.writerow(row)
+            writer.writerow({"text": format_ultron_passage(record), "source": DATASET_SOURCE})
             written += 1
             if args.limit and written >= args.limit:
                 break
 
-    print(f"Exported {written} WikiWhy records to {args.output}")
-    print("This CSV is for retrieval via /ingest; it does not train a model.")
+    print(f"Exported {written} compact WikiWhy passages to {args.output}")
+    print("Import with /ingest; this adds retrieval knowledge and does not train a model.")
     return 0
 
 

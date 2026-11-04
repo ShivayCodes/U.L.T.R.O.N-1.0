@@ -12,6 +12,8 @@ python tools/import_wikiwhy.py
 
 The script downloads the five WikiWhy v1.1 JSON files into `.wikiwhy-cache/` and writes `wikiwhy_ultron.csv`. It uses only Python's standard library. The default export is limited to 5,000 rows to match ULTRON's default knowledge capacity; use `--limit 0` to export all rows. You may select a split, for example `--split train`, or choose a destination with `--output path/to/file.csv`.
 
+Each output row becomes one compact, labeled passage with question, cause, effect, and explanation first. Optional topic, article title, and a bounded 1,200-character context excerpt come afterward so long context text does not crowd out the answer-bearing fields. Dataset provenance is included. This layout is tailored to ULTRON's CSV row ingestion and 20,000-character passage limit.
+
 Start ULTRON and import the CSV:
 
 ```text
