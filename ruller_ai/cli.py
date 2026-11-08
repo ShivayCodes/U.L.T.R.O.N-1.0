@@ -1,60 +1,52 @@
-"""Configuration and workspace-safe paths."""
-import os
-from dataclasses import dataclass
+"""Interactive command-line interface."""
+import argparse
 from pathlib import Path
 
+if not __package__:
+    raise SystemExit(
+        "Run the CLI as a package from the repository root: "
+        "python -m ruller_ai"
+    )
 
-@dataclass(frozen=True)
-class Settings:
-    """Runtime settings. All persistent data stays in the selected data directory."""
+from .config import Settings
+from .engine import RullerAI
 
-    data_dir: Path = Path.home() / ".ruller_ai"
-    max_input_chars: int = 8_000
-    max_memory_items: int = 2_000
-    max_knowledge_items: int = 5_000
-    provider: str | None = None
-    model: str | None = None
-    api_base: str | None = None
-    api_key: str | None = None
 
-    def __post_init__(self) -> None:
-        if self.provider is None:
-            env_provider = os.getenv("ULTRON_PROVIDER")
-            if env_provider:
-                object.__setattr__(self, "provider", env_provider.strip())
-        if self.model is None:
-            env_model = os.getenv("ULTRON_MODEL")
-            if env_model:
-                object.__setattr__(self, "model", env_model.strip())
-        if self.api_base is None:
-            env_api_base = os.getenv("OPENAI_API_BASE") or os.getenv("ULTRON_API_BASE")
-            if env_api_base:
-                object.__setattr__(self, "api_base", env_api_base.strip())
-        if self.api_key is None:
-            env_api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ULTRON_API_KEY")
-            if env_api_key:
-                object.__setattr__(self, "api_key", env_api_key.strip())
+def main() -> int:
+    parser = argparse.ArgumentParser(description="ULTRON — local memory + optional real AI model backend")
+    parser.add_argument("--data-dir", type=Path, help="Directory for local memory and knowledge files")
+    parser.add_argument("--provider", choices=["offline", "ollama", "openai"], help="Model backend to use")
+    parser.add_argument("--model", help="Model name for the selected provider")
+    parser.add_argument("--api-base", help="Custom API base URL for OpenAI-compatible endpoints")
+    parser.add_argument("--api-key", help="API key for OpenAI-compatible providers")
+    parser.add_argument("--gui", action="store_true", help="Open the graphical desktop interface")
+    args = parser.parse_args()
 
-    @property
-    def memory_dir(self) -> Path:
-        return self.data_dir / "memory"
+    settings = Settings(
+        data_dir=args.data_dir.expanduser() if args.data_dir else Settings().data_dir,
+        provider=args.provider,
+        model=args.model,
+        api_base=args.api_base,
+        api_key=args.api_key,
+    )
+    if args.gui:
+        from .gui import launch
+        launch(settings)
+        return 0
 
-    @property
-    def memory_file(self) -> Path:
-        return self.memory_dir / "conversation.json"
+    assistant = RullerAI(settings)
+    print("ULTRON ready. Type /help for commands, /exit to quit.")
+    while True:
+        try:
+            message = input("You> ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            return 0
+        if message.strip().casefold() in {"/exit", "exit", "quit"}:
+            print("Goodbye.")
+            return 0
+        print(f"ULTRON> {assistant.chat(message)}")
 
-    @property
-    def knowledge_file(self) -> Path:
-        return self.data_dir / "knowledge.json"
 
-    @property
-    def feedback_file(self) -> Path:
-        return self.data_dir / "feedback.jsonl"
-
-    @property
-    def guard_file(self) -> Path:
-        return self.memory_dir / ".memory_guard.json"
-
-    @property
-    def backup_dir(self) -> Path:
-        return self.memory_dir / "backup"
+if __name__ == "__main__":
+    raise SystemExit(main())

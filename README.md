@@ -1,267 +1,68 @@
-"""Orchestrates local memory, knowledge retrieval, web lookup, and responses."""
-import json
-from datetime import datetime
-from pathlib import Path
+# U.L.T.R.O.N 1.0
 
-from .config import Settings
-from .knowledge import KnowledgeBase
-from .memory import MemoryStore
-from .providers import build_provider
-from .reasoning import UnsafeExpression, safe_calculate
-from .storage import read_json, write_json
-from .tools import Permission, ToolError, create_builtin_registry
-from .web_search import search_web
+**A Python AI assistant with local memory, model backends, and a Windows-friendly graphical interface.**
 
+ULTRON combines local conversation memory and knowledge retrieval with optional Ollama or OpenAI-compatible AI models. The desktop app uses Python's built-in Tkinter toolkit, so no additional GUI package is required.
 
-class RullerAI:
-    """Offline-first assistant with optional live model support."""
+## Windows desktop app
 
-    def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or Settings()
-        self.settings.data_dir.mkdir(parents=True, exist_ok=True)
-        self.settings.memory_dir.mkdir(parents=True, exist_ok=True)
-        self.memory = MemoryStore(
-            self.settings.memory_file,
-            self.settings.max_memory_items,
-            self.settings.guard_file,
-        )
-        self.knowledge = KnowledgeBase(self.settings.knowledge_file, self.settings.max_knowledge_items)
-        self.learning_file = self.settings.data_dir / "learning.json"
-        learning = read_json(self.learning_file, {})
-        self._auto_learn_enabled = isinstance(learning, dict) and learning.get("enabled") is True
-        self.provider = build_provider(
-            self.settings.provider,
-            model=self.settings.model,
-            api_base=self.settings.api_base,
-            api_key=self.settings.api_key,
-        )
-        self.system_prompt = (
-            "You are ULTRON, a helpful AI assistant. Use local knowledge and web sources "
-            "when needed, and clearly state uncertainty when the answer is not reliable."
-        )
-        self.tools = create_builtin_registry()
+1. Install Python 3.10 or newer and enable **Add Python to PATH** in the installer.
+2. Download or clone this repository and open its folder.
+3. Double-click `run_ultron_gui.bat`.
 
-    def _model_answer(self, prompt: str) -> str | None:
-        if self.provider is None:
-            return None
-        try:
-            return self.provider.generate(prompt, system_prompt=self.system_prompt, max_tokens=512)
-        except Exception:
-            return None
+Alternatively, from PowerShell in the project folder:
 
-    def chat(self, message: str) -> str:
-        text = message.strip()
-        if not text:
-            return "Please enter a message."
-        if len(text) > self.settings.max_input_chars:
-            return f"Your message is too long. Limit: {self.settings.max_input_chars} characters."
+```powershell
+py -3 -m pip install -e .
+ultron-gui
+```
 
-        self.memory.add("user", text)
-        lowered = text.casefold()
+You can also launch the GUI from the module:
 
-        if lowered in {"/help", "help"}:
-            answer = self.help_text()
-        elif lowered in {"/time", "what time is it", "what is the time"}:
-            answer = self._run_tool("time")
-        elif lowered == "/date" or lowered.startswith("/date "):
-            answer = self._run_tool("date", text[len("/date"):].strip())
-        elif lowered.startswith("/convert "):
-            answer = self._run_tool("convert", text[len("/convert"):].strip())
-        elif lowered == "/tool" or lowered.startswith("/tool "):
-            answer = self._tool_command(text[len("/tool"):].strip())
-        elif lowered in {"/clear", "clear memory"}:
-            self.memory.clear()
-            answer = "Conversation memory cleared. Knowledge and saved web research were not changed."
-        elif lowered.startswith("/calc "):
-            answer = self._calculate(text[6:])
-        elif lowered.startswith("/remember "):
-            fact = text[len("/remember "):].strip()
-            answer = "Tell me what to remember after /remember." if not fact else self._remember(fact)
-        elif lowered.startswith("/learn "):
-            fact = text[len("/learn "):].strip()
-            if fact:
-                added = self.knowledge.add_text(fact, "user note")
-                answer = "Saved to the local knowledge base." if added else "That note is already in the knowledge base."
-            else:
-                answer = "Usage: /learn text you want to add"
-        elif lowered.startswith("/search "):
-            answer = self._search(text[8:])
-        elif lowered.startswith("/ingest "):
-            answer = self._ingest(text[8:])
-        elif lowered.startswith("/autolearn"):
-            answer = self._autolearn(text[len("/autolearn"):].strip())
-        elif lowered.startswith("/web "):
-            answer = self._web_lookup(text[5:].strip(), save=False)
-        elif lowered.startswith("/research "):
-            answer = self._web_lookup(text[len("/research"):].strip(), save=True)
-        elif lowered in {"/stats", "stats"}:
-            answer = self.stats()
-        elif lowered in {"/model", "model"}:
-            provider_name = self.provider.name if self.provider is not None else "offline"
-            answer = f"Model provider: {provider_name}. Status: {'connected' if self.provider is not None else 'offline'}"
-        elif lowered in {"hi", "hello", "hey", "hello ruller", "hi ruller"}:
-            answer = "Hello! I'm ULTRON, your local assistant with optional real-model support. Ask a question, use /help, or teach me with /learn."
-        else:
-            answer = self._model_answer(text)
-            if answer is None:
-                answer = self._answer_from_knowledge(text)
-            if self._auto_learn_enabled and not text.startswith("/"):
-                self.knowledge.add_text(text, "opt-in conversation learning")
+```powershell
+py -3 -m ruller_ai --gui
+```
 
-        self.memory.add("assistant", answer)
-        return answer
+The GUI starts in offline mode by default. In the **Model connection** section choose `ollama` or `openai`, enter the model name, add API settings if needed, then select **Apply model settings**. Ollama must be installed and running locally. For hosted OpenAI-compatible services, enter the endpoint and API key; keys are kept in memory for the current app session and are not written to the data files.
 
-    @staticmethod
-    def help_text() -> str:
-        return (
-            "ULTRON commands:\n"
-            "  /help                 Show this help\n"
-            "  /model                Show the active model provider status\n"
-            "  /calc 12 * (3 + 2)    Safely calculate arithmetic\n"
-            "  /learn some fact      Add text to local knowledge\n"
-            "  /search keywords      Search local knowledge\n"
-            "  /ingest path          Import a text file (max 1 MB) or CSV dataset (max 200 MB)\n"
-            "  /remember a note      Save a note to conversation memory\n"
-            "  /autolearn on|off     Opt in/out of saving future chat messages to knowledge\n"
-            "  /convert 10 km to mi  Convert common local units (read-only)\n"
-            "  /date tomorrow        Show a local relative date (read-only)\n"
-            "  /tool list|status     Inspect built-in tools and permission policy\n"
-            "  /web query            Search the web without saving results\n"
-            "  /research query       Search the web and save returned snippets locally\n"
-            "  /stats                Show local data counts\n"
-            "  /time                 Show local system time\n"
-            "  /clear                Clear conversation memory only\n"
-            "When a model provider is available, it answers general questions before the local fallback.\n"
-            "CSV rows are added to searchable local knowledge; this does not train a model.\n"
-            "Web results are external and may be incomplete or inaccurate."
-        )
+## Command-line mode
 
-    def _run_tool(self, name: str, argument: str = "") -> str:
-        try:
-            return self.tools.run(name, argument)
-        except ToolError as exc:
-            return f"Tool request rejected: {exc}"
+The existing terminal interface is still available:
 
-    def _tool_command(self, command: str) -> str:
-        option = command.casefold()
-        if option == "list":
-            rows = ["Built-in tools (only explicitly registered tools can run):"]
-            for tool in self.tools.list_tools():
-                rows.append(f"- {tool.name} [{tool.permission.value}]: {tool.description} Input: {tool.input_schema}. Side effects: {tool.side_effects}")
-            return "\n".join(rows)
-        if option == "status":
-            return (
-                f"Registered built-in tools: {len(self.tools.list_tools())}. "
-                f"SAFE tools run automatically: {sum(tool.permission is Permission.SAFE for tool in self.tools.list_tools())}. "
-                f"Tools requiring confirmation: {sum(tool.permission in {Permission.LIMITED, Permission.CONFIRM} for tool in self.tools.list_tools())}. "
-                f"Blocked tools: {sum(tool.permission is Permission.BLOCKED for tool in self.tools.list_tools())}. "
-                "No arbitrary shell or Python execution is available."
-            )
-        return "Usage: /tool list | /tool status"
+```powershell
+py -3 -m ruller_ai
+```
 
-    def _autolearn(self, option: str) -> str:
-        if option.casefold() == "status":
-            state = "on" if self._auto_learn_enabled else "off"
-            return f"Opt-in conversation learning is {state}."
-        if option.casefold() not in {"on", "off"}:
-            return "Usage: /autolearn on | /autolearn off | /autolearn status"
-        self._auto_learn_enabled = option.casefold() == "on"
-        write_json(self.learning_file, {"enabled": self._auto_learn_enabled})
-        if self._auto_learn_enabled:
-            return "Opt-in learning enabled. Future ordinary messages may be saved to the local knowledge base; existing history is unchanged."
-        return "Opt-in learning disabled. Existing memory and knowledge were not deleted."
+Common launch options:
 
-    def _web_lookup(self, query: str, *, save: bool) -> str:
-        if not query:
-            command = "/research" if save else "/web"
-            return f"Usage: {command} search terms"
-        try:
-            results = search_web(query, limit=5)
-        except (OSError, RuntimeError, ValueError) as exc:
-            return f"Web lookup failed: {exc}"
-        if not results:
-            return "No web results were returned. Try a different query or use /search for local knowledge."
+```powershell
+py -3 -m ruller_ai --gui --provider ollama --model llama3.1
+py -3 -m ruller_ai --provider openai --model gpt-4o-mini
+```
 
-        lines = []
-        for index, result in enumerate(results, 1):
-            title = result["title"]
-            url = result["url"]
-            snippet = result["snippet"]
-            lines.append(f"{index}. {title}\n   {snippet}\n   Source: {url}")
-            if save:
-                retrieved = datetime.now().astimezone().isoformat(timespec="seconds")
-                self.knowledge.add_text(
-                    f"{title}\n{snippet}\nRetrieved: {retrieved}",
-                    url,
-                )
-        heading = "Web results saved to local knowledge (verify sources and dates):\n" if save else "Web results (not saved):\n"
-        return heading + "\n".join(lines)
+## Features
 
-    def _calculate(self, expression: str) -> str:
-        try:
-            return f"{expression.strip()} = {safe_calculate(expression)}"
-        except UnsafeExpression as exc:
-            return f"Calculation rejected: {exc}"
+- Graphical chat window with previous conversation history and asynchronous model requests
+- Windows launch script and an optional installed `ultron-gui` command
+- Optional real model providers (Ollama and OpenAI-compatible HTTP APIs)
+- Local conversation memory and persistent knowledge search
+- Explicit web search and optional user-directed local saving
+- Offline local-retrieval fallback if no model is configured
+- Safe arithmetic evaluation using an AST allowlist, not `eval()` or `exec()`
 
-    def _remember(self, note: str) -> str:
-        self.memory.add("system", "User note: " + note)
-        return "Saved that note in local memory."
+## Commands in chat
 
-    def _search(self, query: str) -> str:
-        results = self.knowledge.search(query, limit=5)
-        if not results:
-            return "No matching local knowledge found. Add information with /learn, /ingest, or /research."
-        return "\n".join(
-            f"{index}. [{item['score']:.3f}] {item['text']} (source: {item['source']})"
-            for index, item in enumerate(results, 1)
-        )
+The GUI accepts the same messages and slash commands as the CLI: `/help`, `/model`, `/learn TEXT`, `/search QUERY`, `/web QUERY`, `/research QUERY`, `/ingest PATH`, `/stats`, and `/clear`. `/clear` asks for confirmation, clears conversation memory, and preserves local knowledge.
 
-    def _answer_from_knowledge(self, query: str) -> str:
-        results = self.knowledge.search(query, limit=3)
-        if results:
-            best = results[0]
-            return (
-                "I found a potentially relevant passage in your local knowledge base "
-                f"(lexical match score {best['score']:.3f}):\n\n{best['text']}\n\n"
-                f"Source: {best['source']}\n"
-                "This is retrieval, not proof that the passage is correct. Use /search for more matches."
-            )
-        prior = self.memory.search(query, limit=2)
-        if prior:
-            excerpt = prior[0].get("content", "")
-            return (
-                "I don't have a general-purpose language model connected, and found no matching knowledge. "
-                f"A related prior conversation entry was: {excerpt}\n\n"
-                "Use /web to look up current sources, or add trusted information with /learn or /ingest."
-            )
-        return (
-            "I'm running in offline baseline mode, so I can't reliably answer open-ended questions yet. "
-            "Use /web for an explicit web lookup, /learn to add trusted material, or /ingest to import a text file."
-        )
+## Data and privacy
 
-    def _ingest(self, raw_path: str) -> str:
-        value = raw_path.strip().strip('"')
-        if not value:
-            return "Usage: /ingest path/to/file.txt or /ingest path/to/dataset.csv"
-        path = Path(value).expanduser()
-        try:
-            added = self.knowledge.ingest_file(path)
-        except (OSError, ValueError, RuntimeError) as exc:
-            return f"Import failed: {exc}"
-        if path.suffix.casefold() == ".csv":
-            return f"Imported {added} new CSV row(s) into searchable local knowledge from {path}. This does not train a model."
-        return f"Imported {added} new text section(s) from {path}."
+Conversation history and learned knowledge are stored locally under `%USERPROFILE%\\.ruller_ai` on Windows (or `~/.ruller_ai` on other platforms). Model prompts are sent to the configured model provider when using a hosted service. Avoid submitting secrets or sensitive data to remote providers or web search. The GUI itself does not store API keys.
 
-    def stats(self) -> str:
-        return json.dumps(
-            {
-                "memory_items": len(self.memory.recent(limit=self.settings.max_memory_items)),
-                "knowledge_items": self.knowledge.count,
-                "auto_learning": self._auto_learn_enabled,
-                "provider": self.provider.name if self.provider is not None else "offline",
-                "built_in_tools": len(self.tools.list_tools()),
-                "data_directory": str(self.settings.data_dir),
-                "memory_directory": str(self.settings.memory_dir),
-            },
-            indent=2,
-        )
+## Tests
+
+```powershell
+py -3 -m compileall -q ruller_ai tests
+py -3 -m unittest discover -s tests -v
+```
+
+The GUI requires a Python installation that includes Tkinter. Standard Windows Python installers usually include it.

@@ -1,4 +1,5 @@
 """Configuration and workspace-safe paths."""
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,20 @@ class Settings:
     model: str | None = None
     api_base: str | None = None
     api_key: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.provider is None and os.getenv("ULTRON_PROVIDER"):
+            object.__setattr__(self, "provider", os.environ["ULTRON_PROVIDER"].strip())
+        if self.model is None and os.getenv("ULTRON_MODEL"):
+            object.__setattr__(self, "model", os.environ["ULTRON_MODEL"].strip())
+        if self.api_base is None:
+            value = os.getenv("OPENAI_API_BASE") or os.getenv("ULTRON_API_BASE")
+            if value:
+                object.__setattr__(self, "api_base", value.strip())
+        if self.api_key is None:
+            value = os.getenv("OPENAI_API_KEY") or os.getenv("ULTRON_API_KEY")
+            if value:
+                object.__setattr__(self, "api_key", value.strip())
 
     @property
     def memory_dir(self) -> Path:
