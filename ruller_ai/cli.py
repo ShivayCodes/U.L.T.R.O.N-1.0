@@ -1,12 +1,10 @@
 """Interactive command-line interface."""
 import argparse
+import getpass
 from pathlib import Path
 
 if not __package__:
-    raise SystemExit(
-        "Run the CLI as a package from the repository root: "
-        "python -m ruller_ai"
-    )
+    raise SystemExit("Run the CLI as a package from the repository root: python -m ruller_ai")
 
 from .config import Settings
 from .engine import RullerAI
@@ -18,16 +16,23 @@ def main() -> int:
     parser.add_argument("--provider", choices=["offline", "ollama", "openai"], help="Model backend to use")
     parser.add_argument("--model", help="Model name for the selected provider")
     parser.add_argument("--api-base", help="Custom API base URL for OpenAI-compatible endpoints")
-    parser.add_argument("--api-key", help="API key for OpenAI-compatible providers")
     parser.add_argument("--gui", action="store_true", help="Open the graphical desktop interface")
     args = parser.parse_args()
 
+    env_settings = Settings()
+    api_key = env_settings.api_key
+    provider = args.provider or env_settings.provider
+    if provider == "openai" and not api_key and not args.gui:
+        try:
+            api_key = getpass.getpass("OpenAI-compatible API key (input hidden): ").strip() or None
+        except (EOFError, KeyboardInterrupt):
+            print("\nNo API key entered; continuing without a model key.")
     settings = Settings(
-        data_dir=args.data_dir.expanduser() if args.data_dir else Settings().data_dir,
+        data_dir=args.data_dir.expanduser() if args.data_dir else env_settings.data_dir,
         provider=args.provider,
         model=args.model,
         api_base=args.api_base,
-        api_key=args.api_key,
+        api_key=api_key,
     )
     if args.gui:
         from .gui import launch

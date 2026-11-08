@@ -1,4 +1,9 @@
-"""Protected memory storage with automatic learning support."""
+"""Protected local conversation history.
+
+The adjacent SHA-256 guard detects accidental or one-sided edits. Because it is
+stored beside the memory file, it is not an authenticated defense against a
+malicious process or user who can modify both files.
+"""
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -9,7 +14,7 @@ from .storage import read_json, write_json
 
 
 class MemoryStore:
-    """Local memory with tamper detection and durable persistence."""
+    """Local bounded memory with accidental-change detection, not secure tamper-proofing."""
 
     def __init__(self, path: Path, max_items: int = 2_000, guard_path: Path | None = None) -> None:
         self.path = path
@@ -18,12 +23,10 @@ class MemoryStore:
         self.backup_dir = path.parent / "backup"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-
         self._items: list[dict[str, Any]] = read_json(path, [])
         if not isinstance(self._items, list):
             raise RuntimeError(f"Invalid memory format in {path}; expected a JSON list.")
         self._build_search_index()
-
         self._verify_guard()
 
     def _build_search_index(self) -> None:
@@ -37,8 +40,7 @@ class MemoryStore:
     def _index_item(self, item: dict[str, Any]) -> None:
         item_id = self._next_id
         self._next_id += 1
-        content = str(item.get("content", ""))
-        words = {word for word in content.casefold().split() if len(word) > 2}
+        words = {word for word in str(item.get("content", "")).casefold().split() if len(word) > 2}
         self._order.append(item_id)
         self._entries[item_id] = (item, words)
         for word in words:
@@ -66,50 +68,41 @@ class MemoryStore:
 
     def _backup_memory(self, reason: str) -> None:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = self.backup_dir / f"memory-backup-{reason}-{timestamp}.json"
-        write_json(backup_path, self._items)
+        write_json(self.backup_dir / f"memory-backup-{reason}-{timestamp}.json", self._items)
 
     def _write_guard(self) -> None:
-        payload = {
+        write_json(self.guard_path, {
             "expected_hash": self._fingerprint(self._items),
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "version": 1,
-        }
-        write_json(self.guard_path, payload)
+        })
 
     def _verify_guard(self) -> None:
         if not self.guard_path.exists():
             self._write_guard()
             return
-
         try:
             guard = read_json(self.guard_path, {})
         except RuntimeError as exc:
-            raise RuntimeError(
-                f"Memory integrity guard is invalid: {self.guard_path}"
-            ) from exc
-
+            raise RuntimeError(f"Memory integrity guard is invalid: {self.guard_path}") from exc
         if not isinstance(guard, dict) or not isinstance(guard.get("expected_hash"), str):
             raise RuntimeError(f"Memory integrity guard is invalid: {self.guard_path}")
-        expected = guard.get("expected_hash")
-        actual = self._fingerprint(self._items)
-        if expected != actual:
+        if guard["expected_hash"] != self._fingerprint(self._items):
             self._backup_memory("tamper")
             raise RuntimeError(
-                "Memory integrity check failed. Protected memory was tampered with; "
-                "a backup was created and the session was stopped."
+                "Memory consistency check failed. A backup was created and the session was stopped. "
+                "This check detects accidental/one-sided edits only; it is not a malicious-tampering boundary."
             )
         self._write_guard()
 
     def add(self, role: str, content: str) -> None:
         if role not in {"user", "assistant", "system"}:
             raise ValueError("role must be user, assistant, or system")
-        item = {
+        self._append({
             "role": role,
             "content": content[:8_000],
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        self._append(item)
+        })
         write_json(self.path, self._items)
         self._write_guard()
 
@@ -117,18 +110,19 @@ class MemoryStore:
         cleaned = content.strip()
         if not cleaned:
             return
-        item = {
+        self._append({
             "role": "system",
             "content": f"[auto-learn:{source}] {cleaned}",
             "source": source,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        self._append(item)
+        })
         write_json(self.path, self._items)
         self._write_guard()
 
     def recent(self, limit: int = 8) -> list[dict[str, Any]]:
-        return [dict(item) for item in self._items[-max(0, limit) :]]
+        if limit <= 0:
+            return []
+        return [dict(item) for item in self._items[-limit:]]
 
     def clear(self) -> None:
         self._items = []

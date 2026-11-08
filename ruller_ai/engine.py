@@ -1,16 +1,19 @@
 """Orchestrates local memory, knowledge retrieval, web lookup, and responses."""
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from .config import Settings
 from .knowledge import KnowledgeBase
 from .memory import MemoryStore
-from .providers import build_provider
+from .providers import ProviderError, build_provider
 from .reasoning import UnsafeExpression, safe_calculate
 from .storage import read_json, write_json
 from .tools import Permission, ToolError, create_builtin_registry
 from .web_search import search_web
+
+logger = logging.getLogger(__name__)
 
 
 class RullerAI:
@@ -20,34 +23,36 @@ class RullerAI:
         self.settings = settings or Settings()
         self.settings.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings.memory_dir.mkdir(parents=True, exist_ok=True)
-        self.memory = MemoryStore(
-            self.settings.memory_file,
-            self.settings.max_memory_items,
-            self.settings.guard_file,
-        )
+        self.memory = MemoryStore(self.settings.memory_file, self.settings.max_memory_items, self.settings.guard_file)
         self.knowledge = KnowledgeBase(self.settings.knowledge_file, self.settings.max_knowledge_items)
         self.learning_file = self.settings.data_dir / "learning.json"
         learning = read_json(self.learning_file, {})
         self._auto_learn_enabled = isinstance(learning, dict) and learning.get("enabled") is True
         self.provider = build_provider(
-            self.settings.provider,
-            model=self.settings.model,
-            api_base=self.settings.api_base,
-            api_key=self.settings.api_key,
+            self.settings.provider, model=self.settings.model,
+            api_base=self.settings.api_base, api_key=self.settings.api_key,
         )
         self.system_prompt = (
             "You are ULTRON, a helpful AI assistant. Use local knowledge and web sources "
             "when needed, and clearly state uncertainty when the answer is not reliable."
         )
         self.tools = create_builtin_registry()
+        self._provider_failure: str | None = None
 
     def _model_answer(self, prompt: str) -> str | None:
+        self._provider_failure = None
         if self.provider is None:
             return None
         try:
             return self.provider.generate(prompt, system_prompt=self.system_prompt, max_tokens=512)
-        except Exception:
-            return None
+        except ProviderError as exc:
+            self._provider_failure = str(exc)
+            logger.warning("Model request failed safely: %s", self._provider_failure)
+        except Exception as exc:
+            # Do not log request content, exception text, URLs, response bodies, or credentials.
+            self._provider_failure = "Unexpected provider error. See local diagnostics for the exception type."
+            logger.warning("Model request failed unexpectedly (%s).", type(exc).__name__)
+        return None
 
     def chat(self, message: str) -> str:
         text = message.strip()
@@ -55,7 +60,6 @@ class RullerAI:
             return "Please enter a message."
         if len(text) > self.settings.max_input_chars:
             return f"Your message is too long. Limit: {self.settings.max_input_chars} characters."
-
         self.memory.add("user", text)
         lowered = text.casefold()
 
@@ -66,7 +70,7 @@ class RullerAI:
         elif lowered == "/date" or lowered.startswith("/date "):
             answer = self._run_tool("date", text[len("/date"):].strip())
         elif lowered.startswith("/convert "):
-            answer = self._run_tool("convert", text[len("/convert"):].strip())
+            answer = self._run_tool("convert", text[len("/convert "):].strip())
         elif lowered == "/tool" or lowered.startswith("/tool "):
             answer = self._tool_command(text[len("/tool"):].strip())
         elif lowered in {"/clear", "clear memory"}:
@@ -105,9 +109,10 @@ class RullerAI:
             answer = self._model_answer(text)
             if answer is None:
                 answer = self._answer_from_knowledge(text)
+                if self._provider_failure:
+                    answer = f"Model request failed: {self._provider_failure}\n\nShowing local fallback:\n\n{answer}"
             if self._auto_learn_enabled and not text.startswith("/"):
                 self.knowledge.add_text(text, "opt-in conversation learning")
-
         self.memory.add("assistant", answer)
         return answer
 
@@ -144,25 +149,24 @@ class RullerAI:
 
     def _tool_command(self, command: str) -> str:
         option = command.casefold()
+        tools = self.tools.list_tools()
         if option == "list":
             rows = ["Built-in tools (only explicitly registered tools can run):"]
-            for tool in self.tools.list_tools():
-                rows.append(f"- {tool.name} [{tool.permission.value}]: {tool.description} Input: {tool.input_schema}. Side effects: {tool.side_effects}")
+            rows.extend(f"- {tool.name} [{tool.permission.value}]: {tool.description} Input: {tool.input_schema}. Side effects: {tool.side_effects}" for tool in tools)
             return "\n".join(rows)
         if option == "status":
             return (
-                f"Registered built-in tools: {len(self.tools.list_tools())}. "
-                f"SAFE tools run automatically: {sum(tool.permission is Permission.SAFE for tool in self.tools.list_tools())}. "
-                f"Tools requiring confirmation: {sum(tool.permission in {Permission.LIMITED, Permission.CONFIRM} for tool in self.tools.list_tools())}. "
-                f"Blocked tools: {sum(tool.permission is Permission.BLOCKED for tool in self.tools.list_tools())}. "
+                f"Registered built-in tools: {len(tools)}. "
+                f"SAFE tools run automatically: {sum(tool.permission is Permission.SAFE for tool in tools)}. "
+                f"Tools requiring confirmation: {sum(tool.permission in {Permission.LIMITED, Permission.CONFIRM} for tool in tools)}. "
+                f"Blocked tools: {sum(tool.permission is Permission.BLOCKED for tool in tools)}. "
                 "No arbitrary shell or Python execution is available."
             )
         return "Usage: /tool list | /tool status"
 
     def _autolearn(self, option: str) -> str:
         if option.casefold() == "status":
-            state = "on" if self._auto_learn_enabled else "off"
-            return f"Opt-in conversation learning is {state}."
+            return f"Opt-in conversation learning is {'on' if self._auto_learn_enabled else 'off'}."
         if option.casefold() not in {"on", "off"}:
             return "Usage: /autolearn on | /autolearn off | /autolearn status"
         self._auto_learn_enabled = option.casefold() == "on"
@@ -173,20 +177,16 @@ class RullerAI:
 
     def _web_lookup(self, query: str, *, save: bool) -> str:
         if not query:
-            command = "/research" if save else "/web"
-            return f"Usage: {command} search terms"
+            return f"Usage: {'/research' if save else '/web'} search terms"
         try:
             results = search_web(query, limit=5)
         except (OSError, RuntimeError, ValueError) as exc:
             return f"Web lookup failed: {exc}"
         if not results:
             return "No web results were returned. Try a different query or use /search for local knowledge."
-
         lines = []
         for index, result in enumerate(results, 1):
-            title = result["title"]
-            url = result["url"]
-            snippet = result["snippet"]
+            title, url, snippet = result["title"], result["url"], result["snippet"]
             lines.append(f"{index}. {title}\n   {snippet}\n   Source: {url}")
             if save:
                 retrieved = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -208,10 +208,7 @@ class RullerAI:
         results = self.knowledge.search(query, limit=5)
         if not results:
             return "No matching local knowledge found. Add information with /learn, /ingest, or /research."
-        return "\n".join(
-            f"{index}. [{item['score']:.3f}] {item['text']} (source: {item['source']})"
-            for index, item in enumerate(results, 1)
-        )
+        return "\n".join(f"{i}. [{item['score']:.3f}] {item['text']} (source: {item['source']})" for i, item in enumerate(results, 1))
 
     def _answer_from_knowledge(self, query: str) -> str:
         results = self.knowledge.search(query, limit=3)
@@ -220,21 +217,16 @@ class RullerAI:
             return (
                 "I found a potentially relevant passage in your local knowledge base "
                 f"(lexical match score {best['score']:.3f}):\n\n{best['text']}\n\n"
-                f"Source: {best['source']}\n"
-                "This is retrieval, not proof that the passage is correct. Use /search for more matches."
+                f"Source: {best['source']}\nThis is retrieval, not proof that the passage is correct. Use /search for more matches."
             )
         prior = self.memory.search(query, limit=2)
         if prior:
-            excerpt = prior[0].get("content", "")
             return (
                 "I don't have a general-purpose language model connected, and found no matching knowledge. "
-                f"A related prior conversation entry was: {excerpt}\n\n"
+                f"A related prior conversation entry was: {prior[0].get('content', '')}\n\n"
                 "Use /web to look up current sources, or add trusted information with /learn or /ingest."
             )
-        return (
-            "I'm running in offline baseline mode, so I can't reliably answer open-ended questions yet. "
-            "Use /web for an explicit web lookup, /learn to add trusted material, or /ingest to import a text file."
-        )
+        return "I'm running in offline baseline mode, so I can't reliably answer open-ended questions yet. Use /web, /learn, or /ingest."
 
     def _ingest(self, raw_path: str) -> str:
         value = raw_path.strip().strip('"')
@@ -250,15 +242,12 @@ class RullerAI:
         return f"Imported {added} new text section(s) from {path}."
 
     def stats(self) -> str:
-        return json.dumps(
-            {
-                "memory_items": len(self.memory.recent(limit=self.settings.max_memory_items)),
-                "knowledge_items": self.knowledge.count,
-                "auto_learning": self._auto_learn_enabled,
-                "provider": self.provider.name if self.provider is not None else "offline",
-                "built_in_tools": len(self.tools.list_tools()),
-                "data_directory": str(self.settings.data_dir),
-                "memory_directory": str(self.settings.memory_dir),
-            },
-            indent=2,
-        )
+        return json.dumps({
+            "memory_items": len(self.memory.recent(self.settings.max_memory_items)),
+            "knowledge_items": self.knowledge.count,
+            "auto_learning": self._auto_learn_enabled,
+            "provider": self.provider.name if self.provider is not None else "offline",
+            "built_in_tools": len(self.tools.list_tools()),
+            "data_directory": str(self.settings.data_dir),
+            "memory_directory": str(self.settings.memory_dir),
+        }, indent=2)
