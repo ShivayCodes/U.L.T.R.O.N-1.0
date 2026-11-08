@@ -203,7 +203,7 @@ class RullerAI:
             return "No web results were returned. Try a different query or use /search for local knowledge."
         lines = []
         for index, result in enumerate(results, 1):
-            title, url, snippet = result["title"], result["url"], result["snippet"]
+            title, url, snippet = result["title"], redact_secrets(result["url"]), result["snippet"]
             lines.append(f"{index}. {title}\n   {snippet}\n   Source: {url}")
             if save:
                 retrieved = datetime.now().astimezone().isoformat(timespec="seconds")
