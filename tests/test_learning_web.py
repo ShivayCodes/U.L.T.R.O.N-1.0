@@ -62,7 +62,7 @@ class LearningAndWebTests(unittest.TestCase):
 
         response = self.ai.chat(f"/ingest {dataset}")
 
-        self.assertIn("Invalid UTF-8 CSV dataset", response)
+        self.assertIn("Malformed CSV dataset", response)
         self.assertEqual(self.ai.knowledge.count, 0)
         self.assertEqual(self.ai.knowledge.search("valid", limit=1), [])
 

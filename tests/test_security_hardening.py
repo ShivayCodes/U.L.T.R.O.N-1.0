@@ -13,7 +13,7 @@ class CsvErrorClassificationTests(unittest.TestCase):
             db = KnowledgeBase(root / "knowledge.json")
             db.add_text("existing material", "test")
             csv_path = root / "invalid.csv"
-            csv_path.write_bytes(b"column\n\\xff\n")
+            csv_path.write_bytes(b"column\n" + bytes([0xFF]) + b"\n")
             with self.assertRaisesRegex(ValueError, "valid UTF-8"):
                 db.ingest_csv(csv_path)
             self.assertEqual(db.count, 1)

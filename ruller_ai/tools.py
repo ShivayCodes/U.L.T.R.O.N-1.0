@@ -138,7 +138,9 @@ _CONVERT_RE = re.compile(rf"^\s*({_NUMBER})\s+([a-zA-Z°]+)\s+(?:to|in)\s+([a-zA
 
 
 def _format_decimal(value: Decimal) -> str:
-    rendered = format(value.normalize(), "f")
+    # Keep conversions readable and consistent across Python versions while
+    # retaining useful precision for repeating decimal ratios.
+    rendered = format(value, ".18f")
     if "." in rendered:
         rendered = rendered.rstrip("0").rstrip(".")
     return rendered or "0"

@@ -10,8 +10,19 @@ from .config import Settings
 from .engine import RullerAI
 
 
+class _SafeArgumentParser(argparse.ArgumentParser):
+    """Avoid echoing supplied argument values, which may contain secrets."""
+
+    def error(self, message: str) -> None:
+        if message.startswith("unrecognized arguments"):
+            message = "unrecognized arguments (argument values withheld)"
+        else:
+            message = "invalid command-line arguments (details withheld)"
+        super().error(message)
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ULTRON — local memory + optional real AI model backend")
+    parser = _SafeArgumentParser(description="ULTRON — local memory + optional real AI model backend")
     parser.add_argument("--data-dir", type=Path, help="Directory for local memory and knowledge files")
     parser.add_argument("--provider", choices=["offline", "ollama", "openai"], help="Model backend to use")
     parser.add_argument("--model", help="Model name for the selected provider")
