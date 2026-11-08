@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .security import validate_model_name
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -30,6 +32,29 @@ class Settings:
             value = os.getenv("OPENAI_API_KEY") or os.getenv("ULTRON_API_KEY")
             if value:
                 object.__setattr__(self, "api_key", value.strip())
+
+        for name in ("max_input_chars", "max_memory_items", "max_knowledge_items"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ValueError(f"{name} must be a positive integer.")
+        if self.max_input_chars > 100_000:
+            raise ValueError("max_input_chars cannot exceed 100,000.")
+        if self.provider is not None:
+            provider = self.provider.strip().casefold()
+            if provider not in {"", "offline", "none", "ollama", "local-ollama", "local_ollama",
+                                "openai", "openai-compatible", "openai_compatible", "openai-compatible-http"}:
+                raise ValueError("Unknown provider. Choose offline, ollama, or openai.")
+            object.__setattr__(self, "provider", provider)
+        if self.model is not None:
+            try:
+                object.__setattr__(self, "model", validate_model_name(self.model))
+            except (AttributeError, ValueError) as exc:
+                raise ValueError("Invalid model name.") from exc
+        if self.api_key is not None:
+            key = self.api_key.strip()
+            if len(key) > 4_096 or any(ch in key for ch in "\r\n\x00"):
+                raise ValueError("API key contains invalid characters or exceeds the size limit.")
+            object.__setattr__(self, "api_key", key or None)
 
     @property
     def memory_dir(self) -> Path:
