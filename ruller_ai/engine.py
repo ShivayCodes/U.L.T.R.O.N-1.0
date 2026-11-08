@@ -9,6 +9,14 @@ from .knowledge import KnowledgeBase
 from .memory import MemoryStore
 from .providers import ProviderError, build_provider
 from .reasoning import UnsafeExpression, safe_calculate
+from .security import (
+    InputValidationError,
+    contains_sensitive_value,
+    redact_secrets,
+    secure_system_instructions,
+    validate_chat_input,
+    validate_model_output,
+)
 from .storage import read_json, write_json
 from .tools import Permission, ToolError, create_builtin_registry
 from .web_search import search_web
@@ -32,7 +40,7 @@ class RullerAI:
             self.settings.provider, model=self.settings.model,
             api_base=self.settings.api_base, api_key=self.settings.api_key,
         )
-        self.system_prompt = (
+        self.system_prompt = secure_system_instructions(
             "You are ULTRON, a helpful AI assistant. Use local knowledge and web sources "
             "when needed, and clearly state uncertainty when the answer is not reliable."
         )
@@ -43,24 +51,32 @@ class RullerAI:
         self._provider_failure = None
         if self.provider is None:
             return None
+        if contains_sensitive_value(prompt):
+            self._provider_failure = "Potential credentials detected; remote model transmission was blocked."
+            logger.warning("Model request blocked because the prompt matched a sensitive-value pattern.")
+            return None
         try:
-            return self.provider.generate(prompt, system_prompt=self.system_prompt, max_tokens=512)
+            return validate_model_output(
+                self.provider.generate(prompt, system_prompt=self.system_prompt, max_tokens=512)
+            )
         except ProviderError as exc:
-            self._provider_failure = str(exc)
+            self._provider_failure = redact_secrets(str(exc))
             logger.warning("Model request failed safely: %s", self._provider_failure)
         except Exception as exc:
-            # Do not log request content, exception text, URLs, response bodies, or credentials.
-            self._provider_failure = "Unexpected provider error. See local diagnostics for the exception type."
+            self._provider_failure = "Unexpected provider error. Check local diagnostics."
             logger.warning("Model request failed unexpectedly (%s).", type(exc).__name__)
         return None
 
     def chat(self, message: str) -> str:
-        text = message.strip()
+        try:
+            text = validate_chat_input(message, max_chars=self.settings.max_input_chars)
+        except InputValidationError as exc:
+            return str(exc)
         if not text:
             return "Please enter a message."
-        if len(text) > self.settings.max_input_chars:
-            return f"Your message is too long. Limit: {self.settings.max_input_chars} characters."
-        self.memory.add("user", text)
+
+        # Persist a redacted copy; never write obvious credential assignments to chat history.
+        self.memory.add("user", redact_secrets(text))
         lowered = text.casefold()
 
         if lowered in {"/help", "help"}:
@@ -110,9 +126,10 @@ class RullerAI:
             if answer is None:
                 answer = self._answer_from_knowledge(text)
                 if self._provider_failure:
-                    answer = f"Model request failed: {self._provider_failure}\n\nShowing local fallback:\n\n{answer}"
+                    answer = f"Model request blocked or failed: {self._provider_failure}\n\nShowing local fallback:\n\n{answer}"
             if self._auto_learn_enabled and not text.startswith("/"):
-                self.knowledge.add_text(text, "opt-in conversation learning")
+                self.knowledge.add_text(redact_secrets(text), "opt-in conversation learning")
+        answer = redact_secrets(answer)
         self.memory.add("assistant", answer)
         return answer
 
@@ -180,8 +197,8 @@ class RullerAI:
             return f"Usage: {'/research' if save else '/web'} search terms"
         try:
             results = search_web(query, limit=5)
-        except (OSError, RuntimeError, ValueError) as exc:
-            return f"Web lookup failed: {exc}"
+        except (OSError, RuntimeError, ValueError):
+            return "Web lookup failed. Check connectivity and try again; diagnostic details were withheld."
         if not results:
             return "No web results were returned. Try a different query or use /search for local knowledge."
         lines = []
@@ -190,7 +207,7 @@ class RullerAI:
             lines.append(f"{index}. {title}\n   {snippet}\n   Source: {url}")
             if save:
                 retrieved = datetime.now().astimezone().isoformat(timespec="seconds")
-                self.knowledge.add_text(f"{title}\n{snippet}\nRetrieved: {retrieved}", url)
+                self.knowledge.add_text(redact_secrets(f"{title}\n{snippet}\nRetrieved: {retrieved}"), url)
         heading = "Web results saved to local knowledge (verify sources and dates):\n" if save else "Web results (not saved):\n"
         return heading + "\n".join(lines)
 
@@ -201,7 +218,7 @@ class RullerAI:
             return f"Calculation rejected: {exc}"
 
     def _remember(self, note: str) -> str:
-        self.memory.add("system", "User note: " + note)
+        self.memory.add("system", "User note: " + redact_secrets(note))
         return "Saved that note in local memory."
 
     def _search(self, query: str) -> str:
@@ -235,8 +252,8 @@ class RullerAI:
         path = Path(value).expanduser()
         try:
             added = self.knowledge.ingest_file(path)
-        except (OSError, ValueError, RuntimeError) as exc:
-            return f"Import failed: {exc}"
+        except (OSError, ValueError, RuntimeError):
+            return "Import failed. Check that the file exists, is supported, and meets the documented size limits."
         if path.suffix.casefold() == ".csv":
             return f"Imported {added} new CSV row(s) into searchable local knowledge from {path}. This does not train a model."
         return f"Imported {added} new text section(s) from {path}."
