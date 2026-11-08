@@ -6,6 +6,7 @@ from pathlib import Path
 from .config import Settings
 from .knowledge import KnowledgeBase
 from .memory import MemoryStore
+from .providers import build_provider
 from .reasoning import UnsafeExpression, safe_calculate
 from .storage import read_json, write_json
 from .tools import Permission, ToolError, create_builtin_registry
@@ -13,7 +14,7 @@ from .web_search import search_web
 
 
 class RullerAI:
-    """Offline-first assistant; network lookup is explicit and opt-in per query."""
+    """Offline-first assistant with optional live model support."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
@@ -28,7 +29,25 @@ class RullerAI:
         self.learning_file = self.settings.data_dir / "learning.json"
         learning = read_json(self.learning_file, {})
         self._auto_learn_enabled = isinstance(learning, dict) and learning.get("enabled") is True
+        self.provider = build_provider(
+            self.settings.provider,
+            model=self.settings.model,
+            api_base=self.settings.api_base,
+            api_key=self.settings.api_key,
+        )
+        self.system_prompt = (
+            "You are ULTRON, a helpful AI assistant. Use local knowledge and web sources "
+            "when needed, and clearly state uncertainty when the answer is not reliable."
+        )
         self.tools = create_builtin_registry()
+
+    def _model_answer(self, prompt: str) -> str | None:
+        if self.provider is None:
+            return None
+        try:
+            return self.provider.generate(prompt, system_prompt=self.system_prompt, max_tokens=512)
+        except Exception:
+            return None
 
     def chat(self, message: str) -> str:
         text = message.strip()
@@ -77,10 +96,15 @@ class RullerAI:
             answer = self._web_lookup(text[len("/research"):].strip(), save=True)
         elif lowered in {"/stats", "stats"}:
             answer = self.stats()
+        elif lowered in {"/model", "model"}:
+            provider_name = self.provider.name if self.provider is not None else "offline"
+            answer = f"Model provider: {provider_name}. Status: {'configured' if self.provider is not None else 'offline'}"
         elif lowered in {"hi", "hello", "hey", "hello ruller", "hi ruller"}:
-            answer = "Hello! I'm Ruller AI, your local assistant prototype. Ask a question, use /help, or teach me with /learn."
+            answer = "Hello! I'm ULTRON, your local assistant with optional real-model support. Ask a question, use /help, or teach me with /learn."
         else:
-            answer = self._answer_from_knowledge(text)
+            answer = self._model_answer(text)
+            if answer is None:
+                answer = self._answer_from_knowledge(text)
             if self._auto_learn_enabled and not text.startswith("/"):
                 self.knowledge.add_text(text, "opt-in conversation learning")
 
@@ -90,8 +114,9 @@ class RullerAI:
     @staticmethod
     def help_text() -> str:
         return (
-            "Ruller AI commands:\n"
+            "ULTRON commands:\n"
             "  /help                 Show this help\n"
+            "  /model                Show the active model provider status\n"
             "  /calc 12 * (3 + 2)    Safely calculate arithmetic\n"
             "  /learn some fact      Add text to local knowledge\n"
             "  /search keywords      Search local knowledge\n"
@@ -106,6 +131,7 @@ class RullerAI:
             "  /stats                Show local data counts\n"
             "  /time                 Show local system time\n"
             "  /clear                Clear conversation memory only\n"
+            "When a model provider is available, it answers general questions before the local fallback.\n"
             "CSV rows are added to searchable local knowledge; this does not train a model.\n"
             "Web results are external and may be incomplete or inaccurate."
         )
@@ -164,10 +190,7 @@ class RullerAI:
             lines.append(f"{index}. {title}\n   {snippet}\n   Source: {url}")
             if save:
                 retrieved = datetime.now().astimezone().isoformat(timespec="seconds")
-                self.knowledge.add_text(
-                    f"{title}\n{snippet}\nRetrieved: {retrieved}",
-                    url,
-                )
+                self.knowledge.add_text(f"{title}\n{snippet}\nRetrieved: {retrieved}", url)
         heading = "Web results saved to local knowledge (verify sources and dates):\n" if save else "Web results (not saved):\n"
         return heading + "\n".join(lines)
 
@@ -232,6 +255,7 @@ class RullerAI:
                 "memory_items": len(self.memory.recent(limit=self.settings.max_memory_items)),
                 "knowledge_items": self.knowledge.count,
                 "auto_learning": self._auto_learn_enabled,
+                "provider": self.provider.name if self.provider is not None else "offline",
                 "built_in_tools": len(self.tools.list_tools()),
                 "data_directory": str(self.settings.data_dir),
                 "memory_directory": str(self.settings.memory_dir),

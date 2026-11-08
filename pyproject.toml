@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ultron-1-0"
-version = "1.0.0"
-description = "U.L.T.R.O.N 1.0 — offline-first, modular Python assistant prototype with local memory and retrieval"
+version = "1.1.0"
+description = "ULTRON assistant with local memory, a Windows desktop GUI, and optional AI model backends"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -14,6 +14,9 @@ dependencies = []
 
 [project.scripts]
 ruller-ai = "ruller_ai.cli:main"
+
+[project.gui-scripts]
+ultron-gui = "ruller_ai.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["ruller_ai*"]

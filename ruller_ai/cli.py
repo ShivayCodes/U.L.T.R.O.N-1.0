@@ -13,12 +13,29 @@ from .engine import RullerAI
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ruller AI — offline-first Python assistant prototype")
+    parser = argparse.ArgumentParser(description="ULTRON — local memory + optional real AI model backend")
     parser.add_argument("--data-dir", type=Path, help="Directory for local memory and knowledge files")
+    parser.add_argument("--provider", choices=["offline", "ollama", "openai"], help="Model backend to use")
+    parser.add_argument("--model", help="Model name for the selected provider")
+    parser.add_argument("--api-base", help="Custom API base URL for OpenAI-compatible endpoints")
+    parser.add_argument("--api-key", help="API key for OpenAI-compatible providers")
+    parser.add_argument("--gui", action="store_true", help="Open the graphical desktop interface")
     args = parser.parse_args()
-    settings = Settings(data_dir=args.data_dir.expanduser()) if args.data_dir else Settings()
+
+    settings = Settings(
+        data_dir=args.data_dir.expanduser() if args.data_dir else Settings().data_dir,
+        provider=args.provider,
+        model=args.model,
+        api_base=args.api_base,
+        api_key=args.api_key,
+    )
+    if args.gui:
+        from .gui import launch
+        launch(settings)
+        return 0
+
     assistant = RullerAI(settings)
-    print("Ruller AI ready. Type /help for commands, /exit to quit.")
+    print("ULTRON ready. Type /help for commands, /exit to quit.")
     while True:
         try:
             message = input("You> ")
@@ -28,7 +45,7 @@ def main() -> int:
         if message.strip().casefold() in {"/exit", "exit", "quit"}:
             print("Goodbye.")
             return 0
-        print(f"Ruller> {assistant.chat(message)}")
+        print(f"ULTRON> {assistant.chat(message)}")
 
 
 if __name__ == "__main__":
