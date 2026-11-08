@@ -40,6 +40,8 @@ class Settings:
         if self.max_input_chars > 100_000:
             raise ValueError("max_input_chars cannot exceed 100,000.")
         if self.provider is not None:
+            if not isinstance(self.provider, str):
+                raise ValueError("Provider name must be text.")
             provider = self.provider.strip().casefold()
             if provider not in {"", "offline", "none", "ollama", "local-ollama", "local_ollama",
                                 "openai", "openai-compatible", "openai_compatible", "openai-compatible-http"}:
@@ -50,7 +52,11 @@ class Settings:
                 object.__setattr__(self, "model", validate_model_name(self.model))
             except (AttributeError, ValueError) as exc:
                 raise ValueError("Invalid model name.") from exc
+        if self.api_base is not None and not isinstance(self.api_base, str):
+            raise ValueError("API base URL must be text.")
         if self.api_key is not None:
+            if not isinstance(self.api_key, str):
+                raise ValueError("API key must be text.")
             key = self.api_key.strip()
             if len(key) > 4_096 or any(ch in key for ch in "\r\n\x00"):
                 raise ValueError("API key contains invalid characters or exceeds the size limit.")
