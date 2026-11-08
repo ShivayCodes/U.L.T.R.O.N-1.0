@@ -31,7 +31,7 @@ class RullerAITests(unittest.TestCase):
                     safe_calculate(expression)
 
     def test_help_and_greeting(self):
-        self.assertIn("Ruller AI commands", self.ai.chat("/help"))
+        self.assertIn("ULTRON commands", self.ai.chat("/help"))
         self.assertIn("Hello", self.ai.chat("hello"))
 
     def test_learn_and_retrieve(self):
