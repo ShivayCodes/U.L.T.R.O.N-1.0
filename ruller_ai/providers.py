@@ -12,14 +12,14 @@ from typing import Any, Protocol
 
 
 class ProviderError(RuntimeError):
-    """Safe-to-display provider failure; never contains prompt or credential data."""
+    """Safe-to-display provider failure; excludes prompts and credentials."""
 
 
 class ModelProvider(Protocol):
     name: str
 
     def generate(self, prompt: str, *, system_prompt: str | None = None, max_tokens: int = 512) -> str:
-        """Return model output for a prompt."""
+        ...
 
 
 class OfflineProvider:
@@ -38,29 +38,35 @@ class OllamaProvider:
         self.model = model
         self.timeout = timeout
 
-    def is_available(self) -> bool:
+    def health_check(self) -> tuple[bool, str]:
         try:
-            result = subprocess.run(
-                ["ollama", "list"], capture_output=True, text=True, timeout=20, check=False
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
-        return result.returncode == 0
+            result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=8, check=False)
+        except FileNotFoundError:
+            return False, "Ollama executable not found; install/start Ollama."
+        except subprocess.TimeoutExpired:
+            return False, "Ollama did not respond within 8 seconds."
+        if result.returncode != 0:
+            return False, "Ollama is not available. Start the local Ollama service."
+        installed = {line.split()[0] for line in (result.stdout or "").splitlines()[1:] if line.split()}
+        if self.model not in installed:
+            return False, f"Ollama is running, but model '{self.model}' is not listed as installed."
+        return True, f"Ollama is running and model '{self.model}' is installed."
+
+    def is_available(self) -> bool:
+        ok, _detail = self.health_check()
+        return ok
 
     def generate(self, prompt: str, *, system_prompt: str | None = None, max_tokens: int = 512) -> str:
-        del max_tokens  # Ollama CLI does not expose a portable per-call token limit.
-        if not self.is_available():
-            raise ProviderError("Ollama is not installed or not reachable.")
+        del max_tokens
+        ok, detail = self.health_check()
+        if not ok:
+            raise ProviderError(detail)
         payload = prompt if system_prompt is None else f"{system_prompt}\n\n{prompt}"
         try:
-            result = subprocess.run(
-                ["ollama", "run", self.model], input=payload, text=True,
-                capture_output=True, timeout=self.timeout, check=False,
-            )
+            result = subprocess.run(["ollama", "run", self.model], input=payload, text=True, capture_output=True, timeout=self.timeout, check=False)
         except subprocess.TimeoutExpired as exc:
             raise ProviderError("Ollama request timed out.") from exc
         if result.returncode != 0:
-            # Never include subprocess stderr/stdout: it may contain submitted content.
             raise ProviderError("Ollama request failed. Check that the selected model is available.")
         response = (result.stdout or "").strip()
         if not response:
@@ -79,10 +85,8 @@ def _is_loopback(hostname: str) -> bool:
 
 
 def validate_api_base(api_base: str) -> urllib.parse.ParseResult:
-    """Validate API URL and prevent credentials or prompts going to remote HTTP."""
     try:
         parsed = urllib.parse.urlparse(api_base)
-        # Accessing .port also validates malformed/out-of-range ports.
         _ = parsed.port
     except (TypeError, ValueError) as exc:
         raise ProviderError("Invalid model API URL.") from exc
@@ -96,18 +100,10 @@ def validate_api_base(api_base: str) -> urllib.parse.ParseResult:
 
 
 class OpenAICompatibleProvider:
-    """Generic OpenAI-compatible provider. Remote API keys are HTTPS-only."""
-
     name = "openai-compatible"
 
-    def __init__(
-        self,
-        model: str = "gpt-4o-mini",
-        *,
-        api_base: str | None = None,
-        api_key: str | None = None,
-        timeout: int = 60,
-    ) -> None:
+    def __init__(self, model: str = "gpt-4o-mini", *, api_base: str | None = None,
+                 api_key: str | None = None, timeout: int = 60) -> None:
         self.model = model
         self.api_base = (api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")).strip()
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -117,21 +113,33 @@ class OpenAICompatibleProvider:
     def _endpoint(self) -> str:
         return f"{self.api_base.rstrip('/')}/chat/completions"
 
+    def health_check(self) -> tuple[bool, str]:
+        if self._parsed_base.scheme == "https" and not self.api_key:
+            return False, "API key is missing. Add one in the sidebar or set OPENAI_API_KEY."
+        endpoint = f"{self.api_base.rstrip('/')}/models"
+        request = urllib.request.Request(endpoint, headers={"Accept": "application/json"})
+        if self.api_key:
+            request.add_header("Authorization", f"Bearer {self.api_key}")
+        try:
+            with urllib.request.urlopen(request, timeout=min(self.timeout, 8)) as response:
+                if not 200 <= response.status < 300:
+                    return False, f"API returned HTTP {response.status}."
+                response.read(1024 * 1024 + 1)
+            return True, "API endpoint responded successfully."
+        except urllib.error.HTTPError as exc:
+            return False, f"API rejected the health check (HTTP {exc.code}); verify key and endpoint."
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return False, "API endpoint is unreachable or timed out. Verify URL and network."
+
     def generate(self, prompt: str, *, system_prompt: str | None = None, max_tokens: int = 512) -> str:
         if not self.api_key and self._parsed_base.scheme == "https":
             raise ProviderError("OPENAI_API_KEY is not configured for the selected provider.")
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [],
-            "max_tokens": max(1, min(int(max_tokens), 4096)),
-        }
+        payload: dict[str, Any] = {"model": self.model, "messages": [], "max_tokens": max(1, min(int(max_tokens), 4096))}
         if system_prompt:
             payload["messages"].append({"role": "system", "content": system_prompt})
         payload["messages"].append({"role": "user", "content": prompt})
-        request = urllib.request.Request(
-            self._endpoint(), data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST",
-        )
+        request = urllib.request.Request(self._endpoint(), data=json.dumps(payload).encode("utf-8"),
+                                         headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
         if self.api_key:
             request.add_header("Authorization", f"Bearer {self.api_key}")
         try:
@@ -143,15 +151,13 @@ class OpenAICompatibleProvider:
         except ProviderError:
             raise
         except urllib.error.HTTPError as exc:
-            # Response bodies can echo request data; deliberately do not display/log them.
             raise ProviderError(f"Model service rejected the request (HTTP {exc.code}). Check model and credentials.") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ProviderError("Model endpoint is unavailable or the request timed out.") from exc
         except (UnicodeError, json.JSONDecodeError, TypeError) as exc:
             raise ProviderError("Model service returned an invalid response.") from exc
         try:
-            choices = body.get("choices") or []
-            content = choices[0].get("message", {}).get("content") or ""
+            content = (body.get("choices") or [])[0].get("message", {}).get("content") or ""
         except (AttributeError, IndexError, TypeError) as exc:
             raise ProviderError("Model service returned an invalid completion format.") from exc
         if not isinstance(content, str) or not content.strip():
@@ -159,14 +165,8 @@ class OpenAICompatibleProvider:
         return content.strip()
 
 
-def build_provider(
-    provider_name: str | None,
-    *,
-    model: str | None = None,
-    api_base: str | None = None,
-    api_key: str | None = None,
-) -> ModelProvider | None:
-    """Build configured provider, or return None for offline-only mode."""
+def build_provider(provider_name: str | None, *, model: str | None = None,
+                   api_base: str | None = None, api_key: str | None = None) -> ModelProvider | None:
     name = (provider_name or "offline").strip().casefold()
     if name in {"", "offline", "none"}:
         return None
