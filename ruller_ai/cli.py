@@ -1,35 +1,60 @@
-"""Interactive command-line interface."""
-import argparse
+"""Configuration and workspace-safe paths."""
+import os
+from dataclasses import dataclass
 from pathlib import Path
 
-if not __package__:
-    raise SystemExit(
-        "Run the CLI as a package from the repository root: "
-        "python -m ruller_ai"
-    )
 
-from .config import Settings
-from .engine import RullerAI
+@dataclass(frozen=True)
+class Settings:
+    """Runtime settings. All persistent data stays in the selected data directory."""
 
+    data_dir: Path = Path.home() / ".ruller_ai"
+    max_input_chars: int = 8_000
+    max_memory_items: int = 2_000
+    max_knowledge_items: int = 5_000
+    provider: str | None = None
+    model: str | None = None
+    api_base: str | None = None
+    api_key: str | None = None
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Ruller AI — offline-first Python assistant prototype")
-    parser.add_argument("--data-dir", type=Path, help="Directory for local memory and knowledge files")
-    args = parser.parse_args()
-    settings = Settings(data_dir=args.data_dir.expanduser()) if args.data_dir else Settings()
-    assistant = RullerAI(settings)
-    print("Ruller AI ready. Type /help for commands, /exit to quit.")
-    while True:
-        try:
-            message = input("You> ")
-        except (EOFError, KeyboardInterrupt):
-            print("\nGoodbye.")
-            return 0
-        if message.strip().casefold() in {"/exit", "exit", "quit"}:
-            print("Goodbye.")
-            return 0
-        print(f"Ruller> {assistant.chat(message)}")
+    def __post_init__(self) -> None:
+        if self.provider is None:
+            env_provider = os.getenv("ULTRON_PROVIDER")
+            if env_provider:
+                object.__setattr__(self, "provider", env_provider.strip())
+        if self.model is None:
+            env_model = os.getenv("ULTRON_MODEL")
+            if env_model:
+                object.__setattr__(self, "model", env_model.strip())
+        if self.api_base is None:
+            env_api_base = os.getenv("OPENAI_API_BASE") or os.getenv("ULTRON_API_BASE")
+            if env_api_base:
+                object.__setattr__(self, "api_base", env_api_base.strip())
+        if self.api_key is None:
+            env_api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ULTRON_API_KEY")
+            if env_api_key:
+                object.__setattr__(self, "api_key", env_api_key.strip())
 
+    @property
+    def memory_dir(self) -> Path:
+        return self.data_dir / "memory"
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+    @property
+    def memory_file(self) -> Path:
+        return self.memory_dir / "conversation.json"
+
+    @property
+    def knowledge_file(self) -> Path:
+        return self.data_dir / "knowledge.json"
+
+    @property
+    def feedback_file(self) -> Path:
+        return self.data_dir / "feedback.jsonl"
+
+    @property
+    def guard_file(self) -> Path:
+        return self.memory_dir / ".memory_guard.json"
+
+    @property
+    def backup_dir(self) -> Path:
+        return self.memory_dir / "backup"
