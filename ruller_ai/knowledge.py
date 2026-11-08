@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .security import redact_secrets
 from .storage import read_json, write_json
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9_'-]+")
@@ -75,7 +76,7 @@ class KnowledgeBase:
         cleaned = text.strip()
         if not cleaned:
             return False
-        record = {"text": cleaned[:self.MAX_ITEM_CHARS], "source": source[:500]}
+        record = {"text": redact_secrets(cleaned)[:self.MAX_ITEM_CHARS], "source": redact_secrets(source)[:500]}
         fingerprint = (record["source"], record["text"])
         if self._fingerprint_counts.get(fingerprint, 0):
             return False
