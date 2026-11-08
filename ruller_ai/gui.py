@@ -303,6 +303,9 @@ class UltronWindow:
         text = self.input_var.get().strip()
         if not text:
             return
+        if len(text) > self.settings.max_input_chars:
+            messagebox.showwarning("Message too long", f"Limit: {self.settings.max_input_chars} characters.", parent=self.root)
+            return
         self.input_var.set("")
         self._append_message("You", text, "user")
         self.busy = True
@@ -314,8 +317,8 @@ class UltronWindow:
         def run_chat() -> None:
             try:
                 response = self.assistant.chat(text)
-            except Exception as exc:
-                response = f"Request failed: {exc}"
+            except Exception:
+                response = "Request failed. Sensitive diagnostic details were withheld."
             self.results.put((text, response))
 
         threading.Thread(target=run_chat, daemon=True).start()
@@ -370,7 +373,7 @@ class UltronWindow:
             )
             assistant = RullerAI(settings)
         except Exception as exc:
-            messagebox.showerror("Settings could not be applied", str(exc), parent=self.root)
+            messagebox.showerror("Settings could not be applied", "The settings were rejected. Check the provider, model name, and endpoint format; sensitive details were withheld.", parent=self.root)
             return
         self.settings = settings
         self.assistant = assistant
