@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Protocol
 
+from .security import validate_model_name, validate_model_output
+
 
 class ProviderError(RuntimeError):
     """Safe-to-display provider failure; never contains prompt or credential data."""
@@ -35,15 +37,18 @@ class OllamaProvider:
     name = "ollama"
 
     def __init__(self, model: str = "llama3.1", *, timeout: int = 60) -> None:
-        self.model = model
-        self.timeout = timeout
+        try:
+            self.model = validate_model_name(model)
+        except ValueError as exc:
+            raise ProviderError("Invalid model name.") from exc
+        self.timeout = max(1, min(int(timeout), 180))
 
     def is_available(self) -> bool:
         try:
             result = subprocess.run(
                 ["ollama", "list"], capture_output=True, text=True, timeout=20, check=False
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
         return result.returncode == 0
 
@@ -59,13 +64,14 @@ class OllamaProvider:
             )
         except subprocess.TimeoutExpired as exc:
             raise ProviderError("Ollama request timed out.") from exc
+        except OSError as exc:
+            raise ProviderError("Ollama could not be started.") from exc
         if result.returncode != 0:
-            # Never include subprocess stderr/stdout: it may contain submitted content.
             raise ProviderError("Ollama request failed. Check that the selected model is available.")
-        response = (result.stdout or "").strip()
-        if not response:
-            raise ProviderError("Ollama returned an empty response.")
-        return response
+        try:
+            return validate_model_output(result.stdout or "")
+        except ValueError as exc:
+            raise ProviderError(str(exc)) from exc
 
 
 def _is_loopback(hostname: str) -> bool:
@@ -82,8 +88,7 @@ def validate_api_base(api_base: str) -> urllib.parse.ParseResult:
     """Validate API URL and prevent credentials or prompts going to remote HTTP."""
     try:
         parsed = urllib.parse.urlparse(api_base)
-        # Accessing .port also validates malformed/out-of-range ports.
-        _ = parsed.port
+        _ = parsed.port  # Validate malformed/out-of-range ports.
     except (TypeError, ValueError) as exc:
         raise ProviderError("Invalid model API URL.") from exc
     if parsed.scheme not in {"https", "http"} or not parsed.hostname:
@@ -95,10 +100,18 @@ def validate_api_base(api_base: str) -> urllib.parse.ParseResult:
     return parsed
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Do not forward prompts or Authorization headers to redirected destinations."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class OpenAICompatibleProvider:
     """Generic OpenAI-compatible provider. Remote API keys are HTTPS-only."""
 
     name = "openai-compatible"
+    MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
     def __init__(
         self,
@@ -108,22 +121,36 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         timeout: int = 60,
     ) -> None:
-        self.model = model
+        try:
+            self.model = validate_model_name(model)
+        except ValueError as exc:
+            raise ProviderError("Invalid model name.") from exc
         self.api_base = (api_base or os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")).strip()
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self.timeout = timeout
+        self.timeout = max(1, min(int(timeout), 180))
         self._parsed_base = validate_api_base(self.api_base)
+        self._opener = urllib.request.build_opener(_NoRedirect())
 
     def _endpoint(self) -> str:
         return f"{self.api_base.rstrip('/')}/chat/completions"
 
     def generate(self, prompt: str, *, system_prompt: str | None = None, max_tokens: int = 512) -> str:
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ProviderError("A non-empty text prompt is required.")
+        if len(prompt) > 8_000:
+            raise ProviderError("Prompt exceeds the 8,000-character safety limit.")
         if not self.api_key and self._parsed_base.scheme == "https":
             raise ProviderError("OPENAI_API_KEY is not configured for the selected provider.")
+        try:
+            token_limit = int(max_tokens)
+        except (TypeError, ValueError) as exc:
+            raise ProviderError("Invalid model token limit.") from exc
+        if token_limit < 1:
+            raise ProviderError("Model token limit must be positive.")
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [],
-            "max_tokens": max(1, min(int(max_tokens), 4096)),
+            "max_tokens": min(token_limit, 4096),
         }
         if system_prompt:
             payload["messages"].append({"role": "system", "content": system_prompt})
@@ -135,28 +162,34 @@ class OpenAICompatibleProvider:
         if self.api_key:
             request.add_header("Authorization", f"Bearer {self.api_key}")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read(4 * 1024 * 1024 + 1)
-            if len(raw) > 4 * 1024 * 1024:
+            with self._opener.open(request, timeout=self.timeout) as response:
+                raw = response.read(self.MAX_RESPONSE_BYTES + 1)
+            if len(raw) > self.MAX_RESPONSE_BYTES:
                 raise ProviderError("Model response exceeded the 4 MiB safety limit.")
             body = json.loads(raw.decode("utf-8"))
         except ProviderError:
             raise
         except urllib.error.HTTPError as exc:
-            # Response bodies can echo request data; deliberately do not display/log them.
+            if 300 <= exc.code < 400:
+                raise ProviderError("Model endpoint redirects are blocked for credential and prompt safety.") from exc
             raise ProviderError(f"Model service rejected the request (HTTP {exc.code}). Check model and credentials.") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ProviderError("Model endpoint is unavailable or the request timed out.") from exc
         except (UnicodeError, json.JSONDecodeError, TypeError) as exc:
             raise ProviderError("Model service returned an invalid response.") from exc
+
+        if not isinstance(body, dict):
+            raise ProviderError("Model service returned an invalid response object.")
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ProviderError("Model service returned an invalid completion format.")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise ProviderError("Model service returned an invalid completion format.")
         try:
-            choices = body.get("choices") or []
-            content = choices[0].get("message", {}).get("content") or ""
-        except (AttributeError, IndexError, TypeError) as exc:
-            raise ProviderError("Model service returned an invalid completion format.") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise ProviderError("Model returned an empty completion.")
-        return content.strip()
+            return validate_model_output(message.get("content"))
+        except ValueError as exc:
+            raise ProviderError(str(exc)) from exc
 
 
 def build_provider(
