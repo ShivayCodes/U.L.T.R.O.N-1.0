@@ -1,43 +1,57 @@
-# U.L.T.R.O.N 1.0
+# ULTRON 1.0
 
-**A Python AI assistant with local memory, model backends, and a Windows-friendly graphical interface.**
+**A Python AI assistant with local memory, optional model backends, and a Windows desktop GUI.**
 
-ULTRON combines local conversation memory and knowledge retrieval with optional Ollama or OpenAI-compatible AI models. The desktop app uses Python's built-in Tkinter toolkit.
+## Windows GUI
 
-## Windows desktop app
-
-1. Install Python 3.10 or newer and enable **Add Python to PATH**.
-2. Download or clone this repository and open its folder.
-3. Double-click `run_ultron_gui.bat`, or run `py -3 -m ruller_ai --gui` in PowerShell.
-
-To install the `ultron-gui` command, run `py -3 -m pip install -e .` and then `ultron-gui`.
-
-The GUI starts offline. In the model settings sidebar select `ollama` or `openai`, enter the model and endpoint, and apply settings. Ollama must be installed locally. API keys entered in the GUI are held only for the current process.
-
-## Command-line mode
+Install Python 3.10+ with Tcl/Tk, then double-click `run_ultron_gui.bat` or launch from PowerShell:
 
 ```powershell
-py -3 -m ruller_ai
+py -3 -m ruller_ai --gui
 ```
 
-Configure hosted credentials using `OPENAI_API_KEY` / `ULTRON_API_KEY`, or use the hidden CLI prompt when selecting OpenAI. Do not put credentials in command-line arguments. Remote model endpoints require HTTPS; HTTP is accepted only for localhost/loopback services.
+The chat composer stays pinned at the bottom. Enter a message and press Enter or click Send. The sidebar provides an interactive command-help list, health checks, and Offline / Local / Online mode shortcuts.
 
-## Features
+## Security controls and backend modes
 
-- Windows desktop chat with chat bubbles, timestamps, dark mode, and a thinking spinner
-- Sidebar settings for provider, model, API endpoint, and API key
-- Ollama and OpenAI-compatible model providers with local fallback
-- Local conversation memory and persistent knowledge search
-- Explicit web search and user-directed local saving
-- Safe arithmetic evaluation using an AST allowlist, not `eval()` or `exec()`
+- **Offline** uses local retrieval only; no model provider is called.
+- **Local** selects Ollama; install it and pull a model (e.g. `ollama pull llama3.1`).
+- **Online** selects an OpenAI-compatible provider. You must explicitly check the hosted-model consent box before applying or sending prompts. Revoke consent to switch back offline.
+- Remote APIs require HTTPS; HTTP is allowed only on loopback and never with an API key. API credentials are not accepted in command-line args. Redirects are not followed, which prevents prompt or authorization replay to a different endpoint.
+- Provider configuration validates URL scheme, host, userinfo, query/fragment, model identifier, credential format, and bounded timeouts. Request prompt and response sizes are bounded. Provider failures are sanitized.
+- GUI rejects oversized/control-character input before displaying or sending it. Chat prompts are sent to hosted services only after session consent; local conversation storage remains on the device.
 
-## Chat commands
+The **Check backend** button checks Ollama availability/model presence or requests the compatible API `/models` endpoint. Some providers omit `/models`; such a check can fail even if completions work. It does not send a chat prompt or guarantee future availability.
 
-The GUI accepts `/help`, `/model`, `/learn TEXT`, `/search QUERY`, `/web QUERY`, `/research QUERY`, `/ingest PATH`, `/stats`, and `/clear`. `/clear` clears conversation memory and preserves local knowledge.
+## CLI and setup
 
-## Data and privacy
+```powershell
+py -3 -m pip install -e .
+py -3 -m ruller_ai
+py -3 -m ruller_ai --gui --data-dir .\ultron-data
+```
 
-Conversation history and learned knowledge are stored under `%USERPROFILE%\\.ruller_ai` on Windows (or `~/.ruller_ai` elsewhere). Hosted model prompts are sent to the configured provider. Avoid submitting secrets or sensitive data to remote providers or web search. The memory SHA-256 sidecar detects accidental or one-sided changes only; it is not malicious-tampering protection. See [Security notes](docs/SECURITY.md).
+Set an Ollama default:
+
+```powershell
+$env:ULTRON_PROVIDER = "ollama"
+$env:ULTRON_MODEL = "llama3.1"
+py -3 -m ruller_ai --gui
+```
+
+For online use, enter the key in the GUI after checking consent, or set `OPENAI_API_KEY`. Never pass a secret as a command-line option or use an untrusted endpoint.
+
+## Commands / help
+
+Type `/help` in the GUI composer or CLI. Commands include `/model`, `/teach QUESTION => ANSWER`, `/feedback helpful|not-helpful [NOTE]`, `/learning status`, `/learning forget all`, `/learn TEXT`, `/search QUERY`, `/ingest PATH`, `/web QUERY`, `/research QUERY`, `/remember NOTE`, `/autolearn on|off|status`, `/calc EXPRESSION`, `/convert`, `/date`, `/time`, `/tool list`, `/tool status`, `/stats`, and `/clear`. Double-click an item in the GUI command list to insert it into the composer.
+
+## Adaptive learning
+
+ULTRON does not train model weights or rewrite itself. `/teach` stores user-approved examples for local retrieval and bounded model prompt context. `/feedback` records a user rating and optional note; notes may be sent to a configured hosted provider only after online consent. `/learning forget all` erases examples and feedback. `/autolearn` is a separate opt-in for adding future chat messages to local knowledge.
+
+## Privacy and limitations
+
+Local data is stored under `%USERPROFILE%\\.ruller_ai` on Windows. Hosted prompts and any included approved examples/feedback notes go to the configured provider only while online mode is explicitly enabled. `/web` and `/research` queries go to DuckDuckGo. Don't submit secrets or confidential data. The memory SHA-256 sidecar detects accidental/one-sided edits, not malicious tampering by someone with same-account write access. No software can promise protection from all exploitation or leaks; keep the OS/Python updated and secure your device.
 
 ## Tests
 
@@ -45,5 +59,3 @@ Conversation history and learned knowledge are stored under `%USERPROFILE%\\.rul
 py -3 -m compileall -q ruller_ai tests
 py -3 -m unittest discover -s tests -v
 ```
-
-The GUI requires a Python installation that includes Tkinter. Standard Windows Python installers usually include it.
