@@ -133,6 +133,21 @@ Chat work runs in a daemon thread. Closing the window destroys the Tk root witho
 
 **Recommended fix:** Either remove the unused parameter or implement and document its intended semantics. Add a focused unit test if the option is retained.
 
+
+
+### 9. [MEDIUM] Existing test expectation no longer matches the CLI help text
+
+**Location:** `tests/test_core.py:test_help_and_greeting` and `ruller_ai/engine.py:RullerAI.help_text`
+
+The test expects the help output to contain `Ruller AI commands`, while the current implementation returns `ULTRON commands`.
+
+**Impact:** The existing unit test is expected to fail even though the command handler returns help text. This creates a noisy test suite and makes it harder to identify genuine regressions.
+
+**Recommended fix:**
+- Choose one canonical product name for the CLI (ULTRON or Ruller AI).
+- Update either the help text or the assertion so they agree.
+- Add a focused test for the exact intended product label and retain coverage for the command list.
+
 ## Positive controls observed
 
 - Arithmetic evaluation uses Python AST nodes and an explicit operator allowlist rather than `eval()` or `exec()` (`ruller_ai/reasoning.py`).
