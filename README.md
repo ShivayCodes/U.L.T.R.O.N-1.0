@@ -23,7 +23,7 @@ You can also launch the GUI from the module:
 py -3 -m ruller_ai --gui
 ```
 
-The GUI starts in offline mode by default. In the **Model connection** section choose `ollama` or `openai`, enter the model name, add API settings if needed, then select **Apply model settings**. Ollama must be installed and running locally. For hosted OpenAI-compatible services, enter the endpoint and API key; keys are kept in memory for the current app session and are not written to the data files.
+The GUI starts in offline mode by default. In the **Model settings** sidebar choose `ollama` or `openai`, enter the model name, add API settings if needed, then select **Apply settings**. Ollama must be installed and running locally. For hosted OpenAI-compatible services, enter the endpoint and API key; keys remain in memory for the current app session and are not written to the data files.
 
 ## Command-line mode
 
@@ -33,30 +33,23 @@ The existing terminal interface is still available:
 py -3 -m ruller_ai
 ```
 
-Common launch options:
-
-```powershell
-py -3 -m ruller_ai --gui --provider ollama --model llama3.1
-py -3 -m ruller_ai --provider openai --model gpt-4o-mini
-```
-
 ## Features
 
-- Graphical chat window with previous conversation history and asynchronous model requests
-- Windows launch script and an optional installed `ultron-gui` command
+- Windows desktop chat with chat bubbles, timestamps, a live thinking spinner, and a dark-mode toggle
+- Sidebar for provider, model, API endpoint, and API-key configuration
 - Optional real model providers (Ollama and OpenAI-compatible HTTP APIs)
 - Local conversation memory and persistent knowledge search
 - Explicit web search and optional user-directed local saving
 - Offline local-retrieval fallback if no model is configured
 - Safe arithmetic evaluation using an AST allowlist, not `eval()` or `exec()`
 
-## Commands in chat
+## Chat commands
 
 The GUI accepts the same messages and slash commands as the CLI: `/help`, `/model`, `/learn TEXT`, `/search QUERY`, `/web QUERY`, `/research QUERY`, `/ingest PATH`, `/stats`, and `/clear`. `/clear` asks for confirmation, clears conversation memory, and preserves local knowledge.
 
 ## Data and privacy
 
-Conversation history and learned knowledge are stored locally under `%USERPROFILE%\\.ruller_ai` on Windows (or `~/.ruller_ai` on other platforms). Model prompts are sent to the configured model provider when using a hosted service. Avoid submitting secrets or sensitive data to remote providers or web search. The GUI itself does not store API keys.
+Conversation history and learned knowledge are stored locally under `%USERPROFILE%\\.ruller_ai` on Windows (or `~/.ruller_ai` on other platforms). When using a hosted model, prompts are sent to that provider. Avoid submitting secrets or sensitive data to remote providers or web search. The GUI does not persist API keys.
 
 ## Tests
 
