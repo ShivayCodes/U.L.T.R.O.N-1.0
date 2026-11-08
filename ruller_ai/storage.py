@@ -1,4 +1,4 @@
-"""Small JSON persistence helpers with atomic writes."""
+"""Atomic JSON persistence helpers."""
 import json
 import os
 import tempfile
@@ -20,14 +20,11 @@ def read_json(path: Path, default: Any, *, max_bytes: int | None = None) -> Any:
         raise RuntimeError(f"Could not read data file {path}: {exc}") from exc
 
 
-def write_json(path: Path, value: Any, *, sync: bool = False) -> None:
+def write_json(path: Path, value: Any) -> None:
+    """Write JSON using a same-directory temporary file, fsync, then atomic replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "wb") as handle:
