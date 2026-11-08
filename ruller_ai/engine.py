@@ -252,7 +252,9 @@ class RullerAI:
         path = Path(value).expanduser()
         try:
             added = self.knowledge.ingest_file(path)
-        except (OSError, ValueError, RuntimeError):
+        except ValueError as exc:
+            return f"Import failed: {redact_secrets(str(exc))}"
+        except (OSError, RuntimeError):
             return "Import failed. Check that the file exists, is supported, and meets the documented size limits."
         if path.suffix.casefold() == ".csv":
             return f"Imported {added} new CSV row(s) into searchable local knowledge from {path}. This does not train a model."
