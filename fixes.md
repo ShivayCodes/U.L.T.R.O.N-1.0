@@ -11,7 +11,7 @@
 
 The project has a useful offline-first baseline: a standard-library Tkinter UI, explicit model adapters, local JSON persistence, bounded document ingestion, and an AST allowlist for arithmetic. The most important next steps are to protect API credentials in transit, correct a memory pagination edge case, make model failures observable, and clarify what the memory integrity guard can and cannot guarantee.
 
-No application source files were modified as part of this review. This file records reproducible findings and recommended fixes so they can be implemented and tested independently.
+The initial review recorded findings without changing application source. A subsequent defense-in-depth implementation is now being prepared on the `security/defense-in-depth` branch; its implementation status and remaining verification work are recorded below.
 
 ## Findings
 
@@ -192,3 +192,39 @@ Also verify manually on Windows 11:
 - [ ] Existing tests remain green.
 
 **Verification status:** Not run during this review. Do not treat the recommendations as implemented until the changes and regression tests have been committed and executed.
+
+
+## Defense-in-depth implementation update — 2026-11-09
+
+Implementation is being staged on branch `security/defense-in-depth`; `main` is not changed by this work.
+
+### Changes added on the hardening branch
+
+- Added `ruller_ai/security.py` for bounded chat input, control-character rejection, model identifier validation, bounded model output, best-effort credential detection/redaction, and model instructions that identify imported/retrieved content as untrusted data.
+- Updated provider adapters to validate model identifiers and response schemas, cap timeouts and prompt/response sizes, reject insecure remote HTTP, and block HTTP redirects so authorization headers and prompts are not forwarded to another host.
+- Updated settings validation for provider names, positive resource limits, model identifiers, and API-key length/control characters.
+- Updated the chat engine to validate input, redact obvious credentials before memory/knowledge persistence, block remote transmission when a prompt matches sensitive-value patterns, sanitize failure messages, and apply explicit untrusted-data instructions to model requests.
+- Updated knowledge persistence to redact common credential assignments in imported/manual content and source labels.
+- Updated the GUI to enforce its configured input limit and avoid displaying raw exception text.
+- Added `tests/test_security.py` for input bounds, model validation, endpoint policy, redaction, prompt policy, and remote-transmission blocking.
+- Corrected the stale CLI help assertion in `tests/test_core.py` to expect the current ULTRON product name.
+- Expanded `docs/SECURITY.md` with trust boundaries, provider policy, data-handling limits, and operational guidance.
+
+### Important limitations
+
+- Prompt-injection resistance is not guaranteed by system instructions. ULTRON must continue to keep model output separate from tool authorization and code execution.
+- Credential detection/redaction is pattern-based and best-effort; it will not recognize every secret format.
+- Previously persisted history is not retroactively scrubbed.
+- These edits do not encrypt local data or defend against a malicious process running as the same Windows user.
+- A custom HTTPS endpoint remains a trust decision. Verify ownership and retention policy before sending private prompts.
+
+### Verification still required
+
+The GitHub source edits have been staged, but the test suite has **not** been executed in a Windows environment during this update. Do not describe the branch as production-ready until the following pass:
+
+```powershell
+py -3 -m compileall -q ruller_ai tests
+py -3 -m unittest discover -s tests -v
+```
+
+Also perform a GUI smoke test, test a mocked HTTPS provider that returns a redirect, test malformed provider JSON and oversized responses, and verify that a test credential never appears in memory, knowledge files, logs, or GUI error dialogs.
