@@ -21,7 +21,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertEqual(validate_chat_input("  hello  "), "hello")
         self.assertEqual(validate_chat_input("line one\nline two"), "line one\nline two")
         with self.assertRaises(InputValidationError):
-            validate_chat_input("x" * 9)
+            validate_chat_input("x" * 9, max_chars=8)
         with self.assertRaises(InputValidationError):
             validate_chat_input("hello\x00world")
         with self.assertRaises(InputValidationError):
@@ -37,7 +37,7 @@ class SecurityHardeningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_model_output({"content": "not a string"})
         with self.assertRaises(ValueError):
-            validate_model_output(" " * 32_001)
+            validate_model_output("x" * 32_001)
 
     def test_remote_http_is_rejected_but_https_and_loopback_are_allowed(self):
         self.assertEqual(validate_api_base("https://api.example.com/v1").scheme, "https")
@@ -56,6 +56,14 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("sk-test-value", safe)
         self.assertNotIn("token-value", safe)
         self.assertIn("[REDACTED]", safe)
+
+    def test_settings_reject_invalid_provider_and_resource_limits(self):
+        with self.assertRaises(ValueError):
+            Settings(provider="unknown-backend")
+        with self.assertRaises(ValueError):
+            Settings(max_input_chars=0)
+        with self.assertRaises(ValueError):
+            Settings(model="invalid model name")
 
     def test_model_instructions_define_untrusted_data_boundary(self):
         policy = secure_system_instructions("Base policy")
