@@ -24,7 +24,7 @@ class InputValidationError(ValueError):
 def validate_chat_input(value: object, *, max_chars: int = MAX_CHAT_INPUT_CHARS) -> str:
     if not isinstance(value, str):
         raise InputValidationError("Message must be text.")
-    if not isinstance(max_chars, int) or max_chars < 1:
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
         raise InputValidationError("Invalid input limit.")
     text = value.strip()
     if not text:
@@ -37,6 +37,8 @@ def validate_chat_input(value: object, *, max_chars: int = MAX_CHAT_INPUT_CHARS)
 
 
 def validate_model_name(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Model name must be text.")
     model = value.strip()
     if not _MODEL_NAME_RE.fullmatch(model):
         raise ValueError("Model name must be 1-128 safe characters (letters, digits, . _ : / @ + -).")
