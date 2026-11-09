@@ -138,11 +138,13 @@ _CONVERT_RE = re.compile(rf"^\s*({_NUMBER})\s+([a-zA-Z°]+)\s+(?:to|in)\s+([a-zA
 
 
 def _format_decimal(value: Decimal) -> str:
-    # Keep conversions readable and consistent across Python versions while
-    # retaining useful precision for repeating decimal ratios.
-    rendered = format(value, ".18f")
+    # Decimal's fixed-precision formatting rounds repeating conversions. Keep
+    # the first 18 fractional digits instead, matching the documented output
+    # precision consistently across Python versions.
+    rendered = format(value, "f")
     if "." in rendered:
-        rendered = rendered.rstrip("0").rstrip(".")
+        whole, fraction = rendered.split(".", 1)
+        rendered = whole + ("." + fraction[:18].rstrip("0") if fraction[:18].rstrip("0") else "")
     return rendered or "0"
 
 
