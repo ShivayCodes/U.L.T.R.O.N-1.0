@@ -12,6 +12,12 @@ license = { text = "MIT" }
 authors = [{ name = "ShivayCodes" }]
 dependencies = []
 
+[project.optional-dependencies]
+pdf = ["pypdf>=4"]
+spreadsheets = ["openpyxl>=3.1"]
+image-ocr = ["pillow>=10", "pytesseract>=0.3.10"]
+image-classification = ["pillow>=10", "torch>=2", "transformers>=4.40"]
+
 [project.scripts]
 ruller-ai = "ruller_ai.cli:main"
 

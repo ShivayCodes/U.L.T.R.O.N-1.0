@@ -15,11 +15,14 @@ def tokens(text: str) -> set[str]:
 
 
 class KnowledgeBase:
-    SUPPORTED = {".txt", ".md", ".rst", ".py", ".json", ".csv", ".html", ".xml"}
+    SUPPORTED = {".txt", ".md", ".rst", ".py", ".json", ".csv", ".html", ".xml", ".pdf", ".xlsx", ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}
     MAX_FILE_BYTES = 1_000_000
+    MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
     MAX_CSV_BYTES = 200 * 1024 * 1024
     MAX_ITEM_CHARS = 20_000
     MAX_CSV_FIELD_CHARS = MAX_ITEM_CHARS
+    MAX_EXTRACTED_CHARS = 1_000_000
+    MAX_SPREADSHEET_ROWS = 10_000
     _csv_limit_lock = threading.Lock()
 
     def __init__(self, path: Path, max_items: int = 5_000) -> None:
@@ -92,18 +95,106 @@ class KnowledgeBase:
             write_json(self.path, self._items)
         return added
 
+    def _add_sections(self, sections: list[str], source: str) -> int:
+        original_items = self._items.copy()
+        added = 0
+        try:
+            for section in sections:
+                added += self._add_text(section, source)
+            if added:
+                write_json(self.path, self._items)
+            return added
+        except Exception:
+            self._restore_items(original_items)
+            raise
+
     def ingest_file(self, path: Path) -> int:
-        if path.suffix.casefold() == ".csv":
+        suffix = path.suffix.casefold()
+        if suffix == ".csv":
             return self.ingest_csv(path)
-        if path.suffix.casefold() not in self.SUPPORTED:
+        if suffix not in self.SUPPORTED:
             raise ValueError(f"Unsupported file type: {path.suffix or '(no extension)'}")
         if not path.is_file():
             raise FileNotFoundError(f"Not a file: {path}")
+        if suffix in {".pdf", ".xlsx"} or suffix in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}:
+            if path.stat().st_size > self.MAX_DOCUMENT_BYTES:
+                raise ValueError("PDF, spreadsheet, or image files larger than 20 MB are not accepted.")
+            if suffix == ".pdf":
+                return self._ingest_pdf(path)
+            if suffix == ".xlsx":
+                return self._ingest_xlsx(path)
+            return self._ingest_image(path)
         if path.stat().st_size > self.MAX_FILE_BYTES:
             raise ValueError("Files larger than 1 MB are not accepted.")
         content = path.read_text(encoding="utf-8", errors="replace")
         chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n", content) if chunk.strip()]
-        return sum(self.add_text(chunk, str(path)) for chunk in chunks)
+        return self._add_sections(chunks, str(path))
+
+    def _ingest_pdf(self, path: Path) -> int:
+        try:
+            from pypdf import PdfReader
+        except ImportError as exc:
+            raise RuntimeError("PDF import requires the optional 'pypdf' package. Install it with: pip install 'ultron-1-0[pdf]'") from exc
+        try:
+            reader = PdfReader(str(path))
+            sections: list[str] = []
+            extracted = 0
+            for number, page in enumerate(reader.pages, 1):
+                text = (page.extract_text() or "").strip()
+                if text:
+                    section = f"Page {number}\n{text}"
+                    extracted += len(section)
+                    if extracted > self.MAX_EXTRACTED_CHARS:
+                        raise ValueError("Extracted document text exceeds the 1 MB limit.")
+                    sections.append(section)
+            return self._add_sections(sections, str(path))
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not read PDF: {exc}") from exc
+
+    def _ingest_xlsx(self, path: Path) -> int:
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise RuntimeError("Spreadsheet import requires the optional 'openpyxl' package. Install it with: pip install 'ultron-1-0[spreadsheets]'") from exc
+        sections: list[str] = []
+        extracted = 0
+        workbook = None
+        try:
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            for sheet in workbook.worksheets:
+                rows = sheet.iter_rows(values_only=True)
+                headers = next(rows, None)
+                if headers is None:
+                    continue
+                labels = [str(value).strip() if value is not None else f"Column {i + 1}" for i, value in enumerate(headers)]
+                for row_number, row in enumerate(rows, 2):
+                    if row_number > self.MAX_SPREADSHEET_ROWS + 1:
+                        raise ValueError(f"Spreadsheet exceeds {self.MAX_SPREADSHEET_ROWS} data rows per sheet.")
+                    cells = ["" if value is None else str(value) for value in row]
+                    text = self._format_csv_row(labels, cells)
+                    if text:
+                        passage = f"Sheet: {sheet.title} | Row {row_number}\n{text}"
+                        extracted += len(passage)
+                        if extracted > self.MAX_EXTRACTED_CHARS:
+                            raise ValueError("Extracted spreadsheet text exceeds the 1 MB limit.")
+                        sections.append(passage)
+            return self._add_sections(sections, str(path))
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not read spreadsheet: {exc}") from exc
+        finally:
+            if workbook is not None:
+                workbook.close()
+
+    def _ingest_image(self, path: Path) -> int:
+        from .vision import extract_text_from_image
+        summary = extract_text_from_image(path)
+        if not summary.raw_text.strip():
+            return 0
+        return self._add_sections(["Text recognized in image:\n" + summary.raw_text[:self.MAX_EXTRACTED_CHARS]], str(path))
 
     @staticmethod
     def _format_csv_row(headers: list[str], row: list[str]) -> str:

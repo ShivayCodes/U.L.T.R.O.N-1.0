@@ -1,11 +1,13 @@
 """Orchestrates local memory, knowledge retrieval, web lookup, and responses."""
 import json
 import logging
+import shlex
 from datetime import datetime
 from pathlib import Path
 
 from .adaptive_learning import AdaptiveLearning
 from .config import Settings
+from .image_classification import classify_image, format_classification
 from .knowledge import KnowledgeBase
 from .memory import MemoryStore
 from .providers import ProviderError, build_provider
@@ -115,6 +117,8 @@ class RullerAI:
             answer = self._search(text[8:])
         elif lowered.startswith("/ingest "):
             answer = self._ingest(text[8:])
+        elif lowered.startswith("/classify"):
+            answer = self._classify(text[len("/classify"):].strip())
         elif lowered.startswith("/autolearn"):
             answer = self._autolearn(text[len("/autolearn"):].strip())
         elif lowered.startswith("/web "):
@@ -189,7 +193,8 @@ class RullerAI:
             "  /learning forget all  Delete approved examples and feedback\n"
             "  /learn TEXT           Add text to local searchable knowledge\n"
             "  /search QUERY         Search local knowledge\n"
-            "  /ingest PATH          Import a supported local text or CSV file\n"
+            "  /ingest PATH          Import text, CSV, PDF, XLSX, or image text locally\n"
+            "  /classify IMAGE MODEL_DIR  Classify an image using a local model\n"
             "  /autolearn on|off     Opt in/out of saving future chat messages to knowledge\n"
             "  /web QUERY            Search the web without saving results\n"
             "  /research QUERY       Search and save returned snippets locally\n"
@@ -295,15 +300,37 @@ class RullerAI:
     def _ingest(self, raw_path: str) -> str:
         value = raw_path.strip().strip('"')
         if not value:
-            return "Usage: /ingest path/to/file.txt or /ingest path/to/dataset.csv"
+            return "Usage: /ingest path/to/file.txt, .csv, .pdf, .xlsx, or image"
         path = Path(value).expanduser()
         try:
             added = self.knowledge.ingest_file(path)
         except (OSError, ValueError, RuntimeError) as exc:
             return f"Import failed: {exc}"
-        if path.suffix.casefold() == ".csv":
+        suffix = path.suffix.casefold()
+        if suffix == ".csv":
             return f"Imported {added} new CSV row(s) into searchable local knowledge from {path}. This does not train a model."
+        if suffix == ".pdf":
+            return f"Imported {added} new PDF page section(s) into searchable local knowledge from {path}. This does not train a model."
+        if suffix == ".xlsx":
+            return f"Imported {added} new spreadsheet row(s) into searchable local knowledge from {path}. This does not train a model."
+        if suffix in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp"}:
+            return f"Imported {added} OCR text section(s) from image {path}. This does not train a model."
         return f"Imported {added} new text section(s) from {path}."
+
+    def _classify(self, argument: str) -> str:
+        try:
+            args = shlex.split(argument)
+        except ValueError as exc:
+            return f"Usage: /classify IMAGE_PATH LOCAL_MODEL_DIRECTORY ({exc})"
+        if len(args) != 2:
+            return "Usage: /classify IMAGE_PATH LOCAL_MODEL_DIRECTORY (the model must already be downloaded locally)"
+        try:
+            results = classify_image(args[0], args[1])
+            report = format_classification(args[0], results)
+            self.knowledge.add_text(report, args[0])
+            return report + "\nSaved the prediction to local searchable knowledge; this does not train or fine-tune the model."
+        except (OSError, ValueError, RuntimeError) as exc:
+            return f"Image classification failed: {exc}"
 
     def stats(self) -> str:
         return json.dumps({

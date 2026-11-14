@@ -66,6 +66,32 @@ class LearningAndWebTests(unittest.TestCase):
         self.assertEqual(self.ai.knowledge.count, 0)
         self.assertEqual(self.ai.knowledge.search("valid", limit=1), [])
 
+    def test_text_ingestion_remains_supported(self):
+        document = self.data_dir / "notes.txt"
+        document.write_text("Local learning remains searchable.\n\nImages can contain text.", encoding="utf-8")
+        response = self.ai.chat(f"/ingest {document}")
+        self.assertIn("Imported 2 new text section(s)", response)
+        self.assertTrue(self.ai.knowledge.search("searchable", limit=1))
+
+    def test_pdf_ingestion_reports_missing_optional_dependency(self):
+        document = self.data_dir / "notes.pdf"
+        document.write_bytes(b"not a real PDF")
+        with patch.dict("sys.modules", {"pypdf": None}):
+            response = self.ai.chat(f"/ingest {document}")
+        self.assertIn("optional 'pypdf'", response)
+
+    def test_image_classification_is_saved_as_retrievable_knowledge(self):
+        image = self.data_dir / "cat.jpg"
+        image.write_bytes(b"test placeholder")
+        model = self.data_dir / "model"
+        model.mkdir()
+        with patch("ruller_ai.engine.classify_image", return_value=[{"label": "cat", "score": 0.97}]), patch(
+            "ruller_ai.engine.format_classification", return_value="Image classification: cat 0.97"
+        ):
+            response = self.ai.chat(f'/classify "{image}" "{model}"')
+        self.assertIn("does not train or fine-tune", response)
+        self.assertIn("cat", self.ai.knowledge.search("classification cat", limit=1)[0]["text"])
+
     @patch("ruller_ai.engine.search_web")
     def test_web_lookup_does_not_save_unless_research_requested(self, mock_search):
         mock_search.return_value = [{
