@@ -8,7 +8,8 @@ System instructions tell the model to treat imported files, retrieved memory, we
 
 ## Provider configuration and transport
 
-- Remote OpenAI-compatible endpoints must use HTTPS. Plain HTTP is accepted only for loopback hosts to support local model servers.
+- Remote OpenAI-compatible endpoints must use HTTPS.
+- Loopback HTTP may be used only without an API key; API-key authentication requires HTTPS, including when the endpoint is on localhost.
 - API URLs containing user information, query strings, or fragments are rejected.
 - Redirects are blocked so prompts and bearer credentials cannot be forwarded to a different endpoint.
 - Provider and model identifiers, timeouts, token limits, response types, and response sizes are validated.
@@ -18,7 +19,7 @@ System instructions tell the model to treat imported files, retrieved memory, we
 ## Input and data handling
 
 - Chat input is bounded by the configured character limit and rejects unsupported control characters.
-- Obvious credential assignments and bearer tokens are redacted before conversation memory and knowledge persistence.
+- Common credential assignments, including quoted JSON keys and values, and bearer tokens are redacted before conversation memory and knowledge persistence.
 - If a chat prompt matches the sensitive-value patterns, remote model transmission is blocked and ULTRON uses its local fallback.
 - GUI input enforces the same configured character limit and suppresses raw exception details.
 - Logs and user-facing provider errors must not include prompts, authorization headers, response bodies, or raw exception text.
