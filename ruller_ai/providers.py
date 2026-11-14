@@ -129,6 +129,8 @@ class OpenAICompatibleProvider:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.timeout = max(1, min(int(timeout), 180))
         self._parsed_base = validate_api_base(self.api_base)
+        if self._parsed_base.scheme != "https" and self.api_key:
+            raise ProviderError("API keys require HTTPS model endpoints; loopback HTTP is allowed only without an API key.")
         self._opener = urllib.request.build_opener(_NoRedirect())
 
     def _endpoint(self) -> str:
