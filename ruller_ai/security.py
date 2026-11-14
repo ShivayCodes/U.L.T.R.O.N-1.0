@@ -12,8 +12,13 @@ MAX_CHAT_INPUT_CHARS = 8_000
 MAX_MODEL_OUTPUT_CHARS = 32_000
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$")
 _SECRET_PATTERNS = (
+    # Header-style bearer credentials, including JSON authorization fields.
+    re.compile(r"""(?i)(["']?authorization["']?\s*:\s*["']?Bearer\s+)[^"'\s,;}\]]+"""),
     re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
-    re.compile(r"(?i)((?:api[_-]?key|token|secret|password)\s*[=:]\s*)[^\s,;]+"),
+    # Accept unquoted assignments and quoted JSON/YAML-style keys and values.
+    re.compile(
+        r"""(?i)(["']?(?:api[_-]?key|token|secret|password)["']?\s*[:=]\s*["']?)[^"'\s,;}\]]+"""
+    ),
 )
 
 
