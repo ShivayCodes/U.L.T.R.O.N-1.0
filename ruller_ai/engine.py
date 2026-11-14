@@ -12,7 +12,6 @@ from .knowledge import KnowledgeBase
 from .memory import MemoryStore
 from .providers import ProviderError, build_provider
 from .reasoning import UnsafeExpression, safe_calculate
-from .storage import read_json, write_json
 from .tools import Permission, ToolError, create_builtin_registry
 from .web_search import search_web
 
@@ -318,16 +317,24 @@ class RullerAI:
         return f"Imported {added} new text section(s) from {path}."
 
     def _classify(self, argument: str) -> str:
+        if not argument.strip():
+            return "Usage: /classify \"IMAGE_PATH\" \"LOCAL_MODEL_DIRECTORY\""
         try:
             args = shlex.split(argument)
         except ValueError as exc:
-            return f"Usage: /classify IMAGE_PATH LOCAL_MODEL_DIRECTORY ({exc})"
+            return f"Usage: /classify \"IMAGE_PATH\" \"LOCAL_MODEL_DIRECTORY\" ({exc})"
         if len(args) != 2:
-            return "Usage: /classify IMAGE_PATH LOCAL_MODEL_DIRECTORY (the model must already be downloaded locally)"
+            return "Usage: /classify \"IMAGE_PATH\" \"LOCAL_MODEL_DIRECTORY\" (the model must already be downloaded locally)"
+        image_path = Path(args[0]).expanduser()
+        model_dir = Path(args[1]).expanduser()
+        if not image_path.is_file():
+            return f"Image classification failed: image not found: {image_path}"
+        if not model_dir.is_dir():
+            return f"Image classification failed: local model directory not found: {model_dir}"
         try:
-            results = classify_image(args[0], args[1])
-            report = format_classification(args[0], results)
-            self.knowledge.add_text(report, args[0])
+            results = classify_image(image_path, model_dir)
+            report = format_classification(image_path, results)
+            self.knowledge.add_text(report, str(image_path))
             return report + "\nSaved the prediction to local searchable knowledge; this does not train or fine-tune the model."
         except (OSError, ValueError, RuntimeError) as exc:
             return f"Image classification failed: {exc}"

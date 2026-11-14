@@ -1,19 +1,19 @@
 # ULTRON 1.0
 
-**ULTRON is an offline-first Python assistant with local conversation memory, a searchable knowledge base, optional Ollama/OpenAI-compatible model backends, and a Windows desktop GUI.**
+**ULTRON is an offline-first Python assistant with local conversation memory, a searchable knowledge base, optional local or hosted model backends, image OCR, and local image classification.**
 
-> **Development status:** This repository is under active development. The latest GitHub Actions run on `main` (14 November 2026) compiled successfully but failed during the unit-test step on Python 3.10–3.13. Do not treat the current branch as a verified stable release.
+> Development status: the project is actively evolving. The core assistant stays local-first and transparent; optional features are intentionally opt-in.
 
 ## What is in the repository?
 
 | Component | Current status | Description |
 | --- | --- | --- |
-| `ruller_ai/` | Main runnable application | CLI, Tkinter GUI, local memory, knowledge retrieval, adaptive examples, provider integration, and allowlisted tools. |
-| `tests/` | Test suite | Unit tests for the main `ruller_ai` package. Current CI is failing; see status above. |
-| `omniagent/` | Experimental prototype | Separate local-first orchestration prototype with provider, routing, SQLite session, and plugin-registry modules. It is not included in the configured install package or current CI test matrix. |
+| `ruller_ai/` | Main application | CLI, Tkinter GUI, local memory, knowledge retrieval, learning examples, provider integration, document ingestion, image OCR, and allowlisted tools. |
+| `tests/` | Test suite | Unit tests for the main `ruller_ai` package. |
+| `omniagent/` | Experimental prototype | Separate local-first orchestration prototype; not considered the main runtime. |
 | `docs/` | Project documentation | Architecture, security, built-in tools, roadmap, and data-ingestion notes. |
 
-The installable package is `ruller_ai`. The `omniagent` directory is exploratory code and should not be assumed to have feature parity with the main assistant.
+The installable package is `ruller_ai`.
 
 ## Features in the main application
 
@@ -21,23 +21,29 @@ The installable package is `ruller_ai`. The `omniagent` directory is exploratory
 - Optional Ollama local-model integration.
 - Optional OpenAI-compatible hosted-model integration.
 - Windows desktop GUI built with Tkinter.
-- User-approved examples and feedback for retrieval/prompt context (not model-weight training).
+- User-approved examples and feedback for retrieval and prompt context (not model-weight training).
 - Opt-in capture of future ordinary chat messages into the local knowledge base.
 - Explicit DuckDuckGo web search; optional saving of returned snippets to local knowledge.
-- Local text/CSV ingestion and searchable notes.
+- Local ingestion of text, CSV, PDF, XLSX, and image text for searchable learning.
+- Local image classification using a model directory that is already present on disk.
 - Safe arithmetic evaluation and deterministic date, time, and unit-conversion tools.
 - Allowlisted tool registry; arbitrary shell and Python execution are not exposed by the built-in tool system.
 
 ## Requirements
 
-- Python **3.10 or newer**.
+- Python 3.10 or newer.
 - Windows, Linux, or macOS for the Python CLI; the documented desktop experience targets Windows.
 - No mandatory third-party runtime dependencies for the core package.
 - Ollama is optional and must be installed separately for local model inference.
 - Hosted model use requires a compatible provider endpoint and API key.
-- Optional image OCR requires the Python packages `pillow` and `pytesseract`, plus the Tesseract OCR application installed on the operating system. OCR is not required for normal assistant use.
+- Optional OCR and document imports require extras:
+  - `pip install 'ultron-1-0[pdf]'`
+  - `pip install 'ultron-1-0[spreadsheets]'`
+  - `pip install 'ultron-1-0[image-ocr]'`
+  - `pip install 'ultron-1-0[image-classification]'`
+- For image OCR, the Tesseract binary must also be installed on the operating system.
 
-## Installation (Windows PowerShell)
+## Installation
 
 Clone the repository and enter its directory:
 
@@ -52,6 +58,12 @@ Create an isolated virtual environment and install the project in editable mode:
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e .
+```
+
+Install optional extras when you want document ingestion or local image classification:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e '.[pdf,spreadsheets,image-ocr,image-classification]'
 ```
 
 Activation is optional. Using the virtual-environment interpreter directly avoids PowerShell execution-policy changes and keeps dependencies isolated.
@@ -112,7 +124,7 @@ Use a secure secret manager or session-scoped environment variable; do not commi
 Remove-Item Env:OPENAI_API_KEY -ErrorAction SilentlyContinue
 ```
 
-The GUI requires explicit hosted-model consent before sending chat prompts to a remote provider. Remote endpoints must use HTTPS. HTTP is accepted only for loopback endpoints without an API key. Provider redirects are not followed.
+The GUI requires explicit hosted-model consent before sending chat prompts to a remote provider. Remote endpoints must use HTTPS. HTTP is accepted only for loopback endpoints without an API key.
 
 ## Help and command reference
 
@@ -129,7 +141,9 @@ Type `/help` in the CLI or GUI chat input to display the in-app help. Commands a
 | Clear learned examples | `/learning forget all` | Delete approved examples and feedback; does not delete conversation memory or knowledge documents. |
 | Add knowledge | `/learn TEXT` | Save a text note to the local knowledge base. |
 | Search knowledge | `/search QUERY` | Search locally stored knowledge. |
-| Import a file | `/ingest PATH` | Import a supported local text or CSV file. |
+| Import a file | `/ingest PATH` | Import a local TXT, CSV, PDF, XLSX, or image file for searchable retrieval. |
+| Local image OCR | `/ingest PATH` on a PNG/JPG/etc. image | Extract visible text from an image using optional OCR libraries. |
+| Local image classification | `/classify "IMAGE_PATH" "LOCAL_MODEL_DIR"` | Run a local offline classifier using a model directory already saved on disk. |
 | Auto-learning | `/autolearn on` | Opt in to adding future ordinary chat messages to local knowledge. |
 | Disable auto-learning | `/autolearn off` | Stop future automatic capture; existing data remains. |
 | Auto-learning status | `/autolearn status` | Show whether automatic capture is enabled. |
@@ -153,6 +167,9 @@ Type `/help` in the CLI or GUI chat input to display the in-app help. Commands a
 /learn Python lists store ordered items.
 /search Python lists
 /teach What is a list in Python? => A list is an ordered, mutable collection.
+/ingest ./data/notes.txt
+/ingest ./data/report.pdf
+/classify "./images/cat.jpg" "./models/cat-classifier"
 /learning status
 /calc (12 + 8) * 3
 /convert 100 km to miles
@@ -161,15 +178,39 @@ Type `/help` in the CLI or GUI chat input to display the in-app help. Commands a
 /exit
 ```
 
-## GUI help
+## Data ingestion and local learning
 
-The desktop interface includes a chat composer, backend selection, model configuration, an API-key field, hosted-model consent, backend health check, and shortcuts for Offline / Local / Online modes. Use the command list in the sidebar to insert a command into the composer. Press Enter or select Send to submit a message.
+ULTRON's `/ingest PATH` command reads supported local files into the searchable local knowledge base. This is retrieval-based learning: it does not train or update model weights.
 
-The backend health check checks local Ollama availability/model presence or requests the compatible API's `/models` endpoint. Some compatible services do not expose that endpoint. A failed health check does not necessarily mean chat completions are unavailable; it does not send a chat prompt or guarantee future availability.
+| Format | Optional install | What is indexed |
+| --- | --- | --- |
+| TXT, Markdown, RST, JSON, HTML, XML, and source files | None | Text sections (maximum 1 MB per file) |
+| CSV | None | Each non-empty row, using the first row as headers (maximum 200 MB) |
+| PDF | `pip install 'ultron-1-0[pdf]'` | Extractable text, labeled by page (maximum 20 MB) |
+| XLSX | `pip install 'ultron-1-0[spreadsheets]'` | Worksheet rows; first row is used as column labels (maximum 20 MB, 10,000 rows per sheet) |
+| PNG, JPG, BMP, GIF, TIFF, WebP | `pip install 'ultron-1-0[image-ocr]'` and install Tesseract | OCR-recognized text (maximum 20 MB) |
+
+Use `/ingest path/to/file` in the CLI or GUI. Imported data is stored locally in the configured data directory and can be retrieved with `/search QUERY`. Avoid ingesting secrets, personal records, or other sensitive data unless you explicitly intend to keep them locally.
+
+## Image classification
+
+For image classification, ULTRON can use a model directory that already exists locally. Install the optional runtime with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e '.[image-classification]'
+```
+
+Then run:
+
+```text
+/classify "./images/cat.jpg" "./models/cat-classifier"
+```
+
+This uses Transformers in `local_files_only=True` mode and does not download model files. Classification results are saved to local searchable knowledge so they can be retrieved later. A classification score is a model prediction, not a guarantee.
 
 ## Adaptive learning: what it does and does not do
 
-ULTRON does **not** train model weights, fine-tune a model, or autonomously rewrite its source code.
+ULTRON does not train model weights, fine-tune a model, or autonomously rewrite its source code.
 
 - `/teach` saves examples explicitly approved by the user.
 - `/feedback` stores a rating and optional correction note.
@@ -187,7 +228,7 @@ Review saved information before enabling hosted mode. Relevant examples or feedb
 - Hosted prompts are sent only when a hosted provider is selected; the GUI additionally requires session consent.
 - API URLs and model identifiers are validated; request sizes and timeouts are bounded; provider redirects are blocked.
 - API keys must not be placed in source control or command-line arguments.
-- The memory SHA-256 sidecar can detect accidental or one-sided edits. It is **not** authenticated protection against a process or account that can modify both the data and its guard file.
+- The memory SHA-256 sidecar can detect accidental or one-sided edits. It is not an authenticated protection against a process or account that can modify both the data and its guard file.
 - Prompt-injection defenses and credential redaction are best-effort controls, not guarantees. Do not submit passwords, API keys, private tokens, or confidential data.
 - Built-in tools are explicitly registered and do not provide arbitrary shell or Python execution.
 
@@ -202,14 +243,13 @@ Install the project and run the checks from the repository root:
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The GitHub Actions workflow is configured for Python 3.10, 3.11, 3.12, and 3.13. The latest run on the current `main` commit completed compilation but failed at the unit-test step across the matrix. The CLI smoke-test step was skipped because the tests failed first. Resolve the failing tests and obtain a green CI run before treating the repository as release-ready.
-
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Built-in tools and permissions](docs/BUILTIN_TOOLS.md)
 - [Security notes](docs/SECURITY.md)
 - [CSV dataset ingestion](docs/CSV_DATASET_INGESTION.md)
+- [Document and image ingestion](docs/FILE_AND_IMAGE_INGESTION.md)
 - [Product roadmap](docs/PRODUCT_ROADMAP.md)
 - [Project requirements](PRD.md)
 

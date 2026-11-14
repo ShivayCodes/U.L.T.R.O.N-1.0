@@ -96,6 +96,8 @@ class KnowledgeBase:
         return added
 
     def _add_sections(self, sections: list[str], source: str) -> int:
+        if not sections:
+            return 0
         original_items = self._items.copy()
         added = 0
         try:
@@ -110,6 +112,8 @@ class KnowledgeBase:
 
     def ingest_file(self, path: Path) -> int:
         suffix = path.suffix.casefold()
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
         if suffix == ".csv":
             return self.ingest_csv(path)
         if suffix not in self.SUPPORTED:
