@@ -6,7 +6,7 @@ from pathlib import Path
 from ruller_ai import RullerAI
 from ruller_ai.config import Settings
 from ruller_ai.knowledge import KnowledgeBase
-from ruller_ai.providers import ProviderError, validate_api_base
+from ruller_ai.providers import OpenAICompatibleProvider, ProviderError, validate_api_base
 from ruller_ai.security import (
     InputValidationError,
     contains_sensitive_value,
@@ -50,6 +50,13 @@ class SecurityHardeningTests(unittest.TestCase):
             validate_api_base("https://user:pass@example.com/v1")
         with self.assertRaises(ProviderError):
             validate_api_base("https://example.com/v1?token=secret")
+
+    def test_api_key_is_never_allowed_over_loopback_http(self):
+        with self.assertRaises(ProviderError):
+            OpenAICompatibleProvider(
+                api_base="http://127.0.0.1:11434/v1",
+                api_key="local-test-key",
+            )
 
     def test_secret_patterns_are_detected_and_redacted(self):
         raw = "api_key=sk-test-value Authorization: Bearer token-value"
