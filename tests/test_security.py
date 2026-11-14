@@ -1,9 +1,11 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from ruller_ai import RullerAI
 from ruller_ai.config import Settings
+from ruller_ai.knowledge import KnowledgeBase
 from ruller_ai.providers import ProviderError, validate_api_base
 from ruller_ai.security import (
     InputValidationError,
@@ -57,6 +59,22 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("token-value", safe)
         self.assertIn("[REDACTED]", safe)
 
+    def test_json_credentials_are_detected_and_redacted_without_breaking_json(self):
+        raw = json.dumps({
+            "api_key": "sk-live-secret",
+            "nested": {"password": "correct-horse"},
+            "Authorization": "Bearer bearer-secret",
+        })
+        self.assertTrue(contains_sensitive_value(raw))
+        safe = redact_secrets(raw)
+        self.assertNotIn("sk-live-secret", safe)
+        self.assertNotIn("correct-horse", safe)
+        self.assertNotIn("bearer-secret", safe)
+        parsed = json.loads(safe)
+        self.assertEqual(parsed["api_key"], "[REDACTED]")
+        self.assertEqual(parsed["nested"]["password"], "[REDACTED]")
+        self.assertEqual(parsed["Authorization"], "Bearer [REDACTED]")
+
     def test_settings_reject_invalid_provider_and_resource_limits(self):
         with self.assertRaises(ValueError):
             Settings(provider="unknown-backend")
@@ -84,6 +102,27 @@ class SecurityHardeningTests(unittest.TestCase):
             saved = ai.memory.recent(10)
             self.assertTrue(saved)
             self.assertNotIn("super-secret-value", saved[-2]["content"])
+
+    def test_json_credential_prompt_is_blocked_and_knowledge_is_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ai = RullerAI(Settings(data_dir=root))
+            class NeverCallProvider:
+                name = "test-provider"
+                def generate(self, *args, **kwargs):
+                    raise AssertionError("JSON credentials must not reach provider.")
+            ai.provider = NeverCallProvider()
+            prompt = '{"api_key":"json-secret-value"}'
+            answer = ai.chat(prompt)
+            self.assertIn("transmission was blocked", answer)
+            self.assertNotIn("json-secret-value", answer)
+            self.assertNotIn("json-secret-value", (root / "memory" / "conversation.json").read_text(encoding="utf-8"))
+
+            knowledge = KnowledgeBase(root / "knowledge" / "items.json")
+            knowledge.add_text(prompt, "imported.json")
+            stored = (root / "knowledge" / "items.json").read_text(encoding="utf-8")
+            self.assertNotIn("json-secret-value", stored)
+            self.assertIn("[REDACTED]", stored)
 
 
 if __name__ == "__main__":
